@@ -1,0 +1,376 @@
+/* ============================================================================
+ * NuRock Design System — helper classes
+ * ----------------------------------------------------------------------------
+ * Extracted from the NuRock Development Management Framework reference.
+ * Append this entire block to the end of src/app/globals.css.
+ *
+ * Pairs with the Tailwind config additions in tailwind-additions.md:
+ *   - colors.nurock.{navy-light, tan-light, tan-dark, slate-light, border}
+ *   - fontFamily.{display, body, mono}
+ *
+ * Load fonts in src/app/layout.tsx (Next.js next/font):
+ *   import { Oswald, Inter, JetBrains_Mono } from "next/font/google";
+ *   ...or via <link> tag for Google Fonts.
+ * ========================================================================= */
+
+/* -- Font helpers -------------------------------------------------------- */
+.font-display { font-family: 'Oswald', ui-sans-serif, system-ui; }
+.font-body    { font-family: 'Inter', ui-sans-serif, system-ui; }
+.font-mono    { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+.num          { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+/* -- Card pattern -------------------------------------------------------- */
+.card {
+  background: #ffffff;
+  border: 1px solid #E4E7EC;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px 0 rgb(16 24 40 / 0.04);
+}
+.card-h {
+  padding: 14px 18px;
+  border-bottom: 1px solid #E4E7EC;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.card-t {
+  font-family: 'Oswald', ui-sans-serif, system-ui;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #164576;
+}
+.card-b { padding: 16px 18px; }
+
+/* -- KPI tiles ----------------------------------------------------------- */
+.kpi-tile {
+  background: #ffffff;
+  border: 1px solid #E4E7EC;
+  border-radius: 10px;
+  padding: 13px 15px;
+  position: relative;
+  overflow: hidden;
+}
+.kpi-tile::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3px;
+  height: 100%;
+  background: #B4AE92; /* default: tan accent */
+}
+.kpi-tile.navy::before  { background: #164576; }
+.kpi-tile.green::before { background: #12B76A; }
+.kpi-tile.amber::before { background: #F79009; }
+.kpi-tile.red::before   { background: #D92D20; }
+.kpi-label {
+  font-family: 'Oswald', ui-sans-serif, system-ui;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #475467;
+}
+.kpi-value {
+  font-family: 'Oswald', ui-sans-serif, system-ui;
+  font-size: 22px;
+  font-weight: 600;
+  color: #101828;
+  letter-spacing: -0.01em;
+  margin-top: 2px;
+}
+.kpi-sub {
+  font-size: 11px;
+  color: #667085;
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+/* -- Badges (semantic pills) -------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-family: 'Oswald', ui-sans-serif, system-ui;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.badge-green { background: #ECFDF3; color: #027A48; }
+.badge-amber { background: #FFFAEB; color: #B54708; }
+.badge-red   { background: #FEF3F2; color: #B42318; }
+.badge-navy  { background: #EFF4FB; color: #164576; }
+.badge-slate { background: #F2F4F7; color: #475467; }
+.badge-tan   { background: #F5F3ED; color: #8F8A6F; }
+
+/* -- Progress bars ------------------------------------------------------- */
+.bar-track {
+  background: #F2F4F7;
+  border-radius: 9999px;
+  overflow: hidden;
+  position: relative;
+}
+.bar-fill {
+  background: linear-gradient(90deg, #164576 0%, #1E5A94 100%);
+  transition: width 600ms cubic-bezier(0.4, 0, 0.2, 1);
+  height: 100%;
+}
+.bar-fill.bar-over  { background: linear-gradient(90deg, #B42318 0%, #D92D20 100%); }
+.bar-fill.bar-under { background: linear-gradient(90deg, #027A48 0%, #12B76A 100%); }
+.bar-fill.bar-tan   { background: linear-gradient(90deg, #B4AE92 0%, #C9C3A8 100%); }
+
+/* -- Tables (.cell / .cell-head pattern) -------------------------------- */
+.cell {
+  padding: 9px 12px;
+  font-size: 12.5px;
+  vertical-align: middle;
+}
+.cell-head {
+  font-family: 'Oswald', ui-sans-serif, system-ui;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #475467;
+  padding: 9px 12px;
+  background: #FAFBFC;
+  border-bottom: 1px solid #E4E7EC;
+  text-align: left;
+  white-space: nowrap;
+}
+.table-row { transition: background 120ms ease; }
+.table-row:hover { background: #FAFBFC; }
+
+/* -- Timeline (dot connector) ------------------------------------------- */
+.timeline-item {
+  position: relative;
+  padding-left: 18px;
+  padding-bottom: 14px;
+}
+.timeline-item:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 14px;
+  bottom: 0;
+  width: 1px;
+  background: #E4E7EC;
+}
+.timeline-item::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid #98A2B3;
+}
+.timeline-item.done::after {
+  background: #12B76A;
+  border-color: #12B76A;
+}
+.timeline-item.active::after {
+  background: #164576;
+  border-color: #164576;
+  box-shadow: 0 0 0 3px rgba(22, 69, 118, 0.2);
+}
+
+/* -- Tab chips (in-card view switcher) ---------------------------------- */
+.tab-chip {
+  transition: all 140ms ease;
+  cursor: pointer;
+}
+.tab-chip:hover  { background: #F2F4F7; }
+.tab-chip.active {
+  background: #164576;
+  color: #ffffff;
+}
+
+/* -- Mini-tab (underlined section switcher) ----------------------------- */
+.mtab {
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #667085;
+  border-bottom: 2px solid transparent;
+  transition: all 140ms;
+  cursor: pointer;
+}
+.mtab:hover  { color: #164576; }
+.mtab.active {
+  color: #164576;
+  border-bottom-color: #164576;
+}
+
+/* -- Inline code chip --------------------------------------------------- */
+.code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: #164576;
+  background: #EFF4FB;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+/* -- Keyboard hint chip ------------------------------------------------- */
+.kbd {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #F2F4F7;
+  color: #475467;
+  border: 1px solid #E4E7EC;
+  border-bottom-width: 2px;
+}
+
+/* -- Status dot --------------------------------------------------------- */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* -- File-type icons (lien waivers, attachments, etc.) ------------------ */
+.file-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 30px;
+  border-radius: 4px;
+  color: #ffffff;
+  font-family: 'Oswald', ui-sans-serif, system-ui;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.file-pdf { background: #D92D20; }
+.file-xls { background: #12B76A; }
+.file-img { background: #7A5AF8; }
+.file-csv { background: #0BA5EC; }
+.file-doc { background: #164576; }
+
+/* -- Co-pilot / checklist rows ----------------------------------------- */
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #F2F4F7;
+  transition: background 140ms;
+}
+.check-row:hover     { background: #FAFBFC; }
+.check-row:last-child { border-bottom: none; }
+.check-ico {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.check-pass { background: #D1FADF; color: #027A48; }
+.check-warn { background: #FEF0C7; color: #B54708; }
+.check-fail { background: #FEE4E2; color: #B42318; }
+.check-info { background: #DBEAFE; color: #1E40AF; }
+
+/* -- Gantt chart bars (schedule visualization) -------------------------- */
+.gantt-bar {
+  position: absolute;
+  top: 6px;
+  height: 22px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  padding: 0 7px;
+  font-size: 10px;
+  color: #ffffff;
+  font-family: 'Oswald', ui-sans-serif, system-ui;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.gantt-grid {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #F2F4F7;
+  pointer-events: none;
+}
+
+/* -- Hero / page backgrounds ------------------------------------------- */
+.grad-bg {
+  background:
+    radial-gradient(ellipse 1200px 400px at 50% -100px, rgba(180, 174, 146, 0.10), transparent 60%),
+    #F7F8FA;
+}
+.hero-bg {
+  background:
+    radial-gradient(circle at 80% 20%, rgba(180, 174, 146, 0.15), transparent 40%),
+    radial-gradient(circle at 10% 80%, rgba(22, 69, 118, 0.08), transparent 35%),
+    linear-gradient(180deg, #FCFCFD 0%, #F7F8FA 100%);
+}
+
+/* -- Scroll shadow ------------------------------------------------------ */
+.scroll-shadow {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0px,
+    black 20px,
+    black calc(100% - 20px),
+    transparent 100%
+  );
+}
+
+/* -- Shimmer loading state --------------------------------------------- */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, #F2F4F7 0%, #F9FAFB 50%, #F2F4F7 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s infinite;
+}
+
+/* -- Custom scrollbars ------------------------------------------------- */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #F7F8FA; }
+::-webkit-scrollbar-thumb {
+  background: #D0D5DD;
+  border-radius: 10px;
+  border: 2px solid #F7F8FA;
+}
+::-webkit-scrollbar-thumb:hover { background: #98A2B3; }
+
+/* -- Focus rings (consistent across inputs/buttons) -------------------- */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #164576;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* -- Disclosure (details/summary) -------------------------------------- */
+details > summary {
+  list-style: none;
+  cursor: pointer;
+}
+details > summary::-webkit-details-marker { display: none; }

@@ -1,0 +1,598 @@
+"use client";
+
+import * as React from "react";
+import {
+  AlertCircle,
+  Check,
+  Circle,
+  CircleDashed,
+  Clock,
+  ExternalLink,
+  FileText,
+} from "lucide-react";
+import {
+  Badge,
+  Card,
+  CardBody,
+  CardHeader,
+  CardTitle,
+  KpiTile,
+} from "@/components/nurock-ui";
+import type {
+  ActiveDrawRollup,
+  ActiveDrawInfo,
+  ActiveDrawLine,
+  ActiveDrawSectionGroup,
+} from "@/lib/data/active-draw-rollup";
+
+// ============================================================================
+// Active Draw shell — v1 read-only
+// ----------------------------------------------------------------------------
+// Sections: Header, approval timeline, KPI strip, schedule grid with
+// Prior/This/Total/Balance columns. v2 will add action buttons, copilot
+// findings panel, and invoice allocation UI.
+// ============================================================================
+
+export function ActiveDrawShell({
+  dealId: _dealId,
+  rollup,
+}: {
+  dealId: string;
+  rollup: ActiveDrawRollup;
+}) {
+  const projectName = rollup.info?.projectName || "Active Draw";
+
+  return (
+    <div
+      className="min-h-full px-8 py-6"
+      style={{
+        background:
+          "radial-gradient(ellipse 1200px 400px at 50% -100px, rgba(180, 174, 146, 0.10), transparent 60%), #F7F8FA",
+      }}
+    >
+      <Header
+        projectName={projectName}
+        info={rollup.info}
+        draw={rollup.draw}
+        drawCount={rollup.drawCount}
+      />
+
+      {!rollup.hasActiveDraw ? (
+        <NoActiveDrawCard />
+      ) : (
+        <>
+          <ApprovalTimeline draw={rollup.draw!} />
+          <KpiStrip rollup={rollup} />
+          <ScheduleGrid rollup={rollup} />
+          <DiagnosticsCard rollup={rollup} />
+        </>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// Header
+// =============================================================================
+
+function Header({
+  projectName,
+  info,
+  draw,
+  drawCount,
+}: {
+  projectName: string;
+  info: ActiveDrawRollup["info"];
+  draw: ActiveDrawInfo | null;
+  drawCount: ActiveDrawRollup["drawCount"];
+}) {
+  const statusTone =
+    draw == null
+      ? "slate"
+      : draw.fundedAt
+      ? "green"
+      : draw.lenderApprovedAt
+      ? "green"
+      : draw.submittedAt
+      ? "navy"
+      : "amber";
+  const statusLabel =
+    draw == null
+      ? "No Draw"
+      : draw.fundedAt
+      ? "Funded"
+      : draw.lenderApprovedAt
+      ? "Lender Approved"
+      : draw.cfoApprovedAt
+      ? "CFO Approved"
+      : draw.pmApprovedAt
+      ? "PM Approved"
+      : draw.submittedAt
+      ? "Submitted"
+      : "Draft";
+
+  return (
+    <div className="mb-5 flex items-start justify-between gap-4">
+      <div>
+        <div className="mb-1.5 flex items-center gap-2">
+          <Badge tone="navy">Active Draw</Badge>
+          {draw && (
+            <Badge tone={statusTone as "slate" | "green" | "navy" | "amber"}>
+              {statusLabel}
+            </Badge>
+          )}
+          {info?.creditStructure && (
+            <Badge tone="slate">{info.creditStructure.replace("_", " ")}</Badge>
+          )}
+          {info && (
+            <span className="text-[11px] text-[#667085]">
+              {info.totalUnits} units · {info.city}, {info.state}
+            </span>
+          )}
+        </div>
+        <h1 className="font-display text-[28px] leading-tight text-nurock-black">
+          {projectName}
+        </h1>
+        {draw ? (
+          <p className="mt-1 text-[13px] text-[#667085]">
+            Draw {draw.drawNumber ?? "?"}
+            {draw.periodStart && draw.periodEnd && (
+              <>
+                {" · "}
+                {formatDateRange(draw.periodStart, draw.periodEnd)}
+              </>
+            )}
+            {" · "}
+            {drawCount.submitted} of {drawCount.total} submitted ·{" "}
+            {drawCount.funded} funded
+          </p>
+        ) : (
+          <p className="mt-1 text-[13px] text-[#667085]">
+            No draws started for this deal yet
+          </p>
+        )}
+      </div>
+      <div className="flex gap-2">
+        {draw?.packageUrl && (
+          <a
+            href={draw.packageUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 rounded-md border border-[#E4E7EC] bg-white px-3 py-1.5 text-[12px] font-medium shadow-sm hover:bg-nurock-gray"
+          >
+            <FileText className="h-3.5 w-3.5" />
+            Package
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// Approval timeline
+// =============================================================================
+
+function ApprovalTimeline({ draw }: { draw: ActiveDrawInfo }) {
+  const steps = [
+    {
+      label: "Submitted",
+      at: draw.submittedAt,
+      by: draw.submittedBy,
+    },
+    {
+      label: "PM Approved",
+      at: draw.pmApprovedAt,
+      by: draw.pmApprovedBy,
+    },
+    {
+      label: "CFO Approved",
+      at: draw.cfoApprovedAt,
+      by: draw.cfoApprovedBy,
+    },
+    {
+      label: "Lender Approved",
+      at: draw.lenderApprovedAt,
+      by: draw.lenderApprovedBy,
+    },
+    {
+      label: "Funded",
+      at: draw.fundedAt,
+      by: null,
+    },
+  ];
+
+  return (
+    <Card className="mb-5">
+      <CardBody className="py-4">
+        <div className="flex items-start justify-between gap-2 overflow-x-auto">
+          {steps.map((step, idx) => {
+            const done = !!step.at;
+            const isCurrent =
+              !done &&
+              steps.slice(0, idx).every((s) => !!s.at) &&
+              idx > 0;
+
+            return (
+              <React.Fragment key={step.label}>
+                <div className="flex min-w-[120px] flex-col items-center text-center">
+                  <div
+                    className={`mb-2 flex h-7 w-7 items-center justify-center rounded-full ${
+                      done
+                        ? "bg-emerald-600 text-white"
+                        : isCurrent
+                        ? "bg-amber-100 text-amber-700 ring-2 ring-amber-400"
+                        : "bg-nurock-gray text-[#98A2B3]"
+                    }`}
+                  >
+                    {done ? (
+                      <Check className="h-4 w-4" />
+                    ) : isCurrent ? (
+                      <Clock className="h-3.5 w-3.5" />
+                    ) : (
+                      <CircleDashed className="h-3.5 w-3.5" />
+                    )}
+                  </div>
+                  <div
+                    className={`font-display text-[10.5px] font-semibold uppercase tracking-[0.06em] ${
+                      done
+                        ? "text-emerald-700"
+                        : isCurrent
+                        ? "text-amber-700"
+                        : "text-[#98A2B3]"
+                    }`}
+                  >
+                    {step.label}
+                  </div>
+                  <div className="mt-0.5 text-[10.5px] text-[#667085]">
+                    {step.at ? formatDate(step.at) : "—"}
+                  </div>
+                  {step.by && (
+                    <div className="mt-0.5 text-[10px] text-[#98A2B3]">
+                      {step.by}
+                    </div>
+                  )}
+                </div>
+                {idx < steps.length - 1 && (
+                  <div
+                    className={`mt-3 h-px flex-1 ${
+                      done ? "bg-emerald-300" : "bg-[#E4E7EC]"
+                    }`}
+                  />
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+// =============================================================================
+// KPI strip
+// =============================================================================
+
+function KpiStrip({ rollup }: { rollup: ActiveDrawRollup }) {
+  const t = rollup.totals;
+  const draw = rollup.draw!;
+  return (
+    <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+      <KpiTile
+        tone="navy"
+        label="This Draw"
+        value={formatUsd(t.thisDraw)}
+        sub={
+          draw.totals.retainage > 0
+            ? `${formatUsd(draw.totals.gross)} gross · ${formatUsd(draw.totals.retainage)} retained`
+            : `${rollup.diagnostics.drawLineCountThisDraw} draw line${rollup.diagnostics.drawLineCountThisDraw === 1 ? "" : "s"}`
+        }
+      />
+      <KpiTile
+        label="Prior Draws"
+        value={formatUsd(t.priorDraws)}
+        sub={`${rollup.drawCount.submitted} submitted draw${rollup.drawCount.submitted === 1 ? "" : "s"} before this one`}
+      />
+      <KpiTile
+        tone="green"
+        label="Total to Date"
+        value={formatUsd(t.totalToDate)}
+        sub={`${formatPct(t.pctTotal)} of adjusted budget`}
+      />
+      <KpiTile
+        label="Adjusted Budget"
+        value={formatUsd(t.adjustedBudget)}
+        sub={
+          t.adjustments === 0
+            ? "No adjustments"
+            : `${formatUsd(t.adjustments, { signed: true })} adjustment`
+        }
+      />
+      <KpiTile
+        label="Copilot Score"
+        value={
+          draw.copilotScore !== null ? `${draw.copilotScore}/100` : "—"
+        }
+        sub={
+          draw.copilotFindings.length > 0
+            ? `${draw.copilotFindings.length} finding${draw.copilotFindings.length === 1 ? "" : "s"}`
+            : "No findings yet"
+        }
+      />
+    </div>
+  );
+}
+
+// =============================================================================
+// Schedule grid
+// =============================================================================
+
+function ScheduleGrid({ rollup }: { rollup: ActiveDrawRollup }) {
+  return (
+    <Card className="mb-5">
+      <CardHeader>
+        <CardTitle
+          subtitle={`${rollup.diagnostics.scheduleLineCount} schedule lines · Prior draws + this draw + total to date`}
+        >
+          Schedule of Values · This Draw
+        </CardTitle>
+        <Badge tone="green">Live</Badge>
+      </CardHeader>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr>
+              <HeaderCell className="min-w-[44px]" align="right">#</HeaderCell>
+              <HeaderCell className="min-w-[260px] sticky left-0 z-10 bg-[#FAFBFC]">Description</HeaderCell>
+              <HeaderCell align="right" className="min-w-[120px]">Original Budget</HeaderCell>
+              <HeaderCell align="right" className="min-w-[110px]">Adjustments</HeaderCell>
+              <HeaderCell align="right" className="min-w-[120px]">Adjusted Budget</HeaderCell>
+              <HeaderCell align="right" className="min-w-[120px]">Prior Draws</HeaderCell>
+              <HeaderCell align="right" className="min-w-[120px] bg-blue-50/40">This Draw</HeaderCell>
+              <HeaderCell align="right" className="min-w-[120px] bg-nurock-navy/[0.04]">Total to Date</HeaderCell>
+              <HeaderCell align="right" className="min-w-[120px]">Balance</HeaderCell>
+              <HeaderCell align="right" className="min-w-[70px]">%</HeaderCell>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[#E4E7EC]">
+            {rollup.bySection.map((sec) => (
+              <SectionBlock key={sec.section} section={sec} />
+            ))}
+            <GrandTotalRow rollup={rollup} />
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function SectionBlock({ section }: { section: ActiveDrawSectionGroup }) {
+  const pctTotal =
+    section.adjustedBudget > 0
+      ? (section.totalToDate / section.adjustedBudget) * 100
+      : 0;
+  const sectionDisplay = formatSectionName(section.section);
+
+  return (
+    <>
+      <tr className="bg-nurock-navy/[0.06]">
+        <td
+          colSpan={10}
+          className="px-3 py-2 font-display text-[10.5px] font-semibold uppercase tracking-[0.08em] text-nurock-navy"
+        >
+          {sectionDisplay}
+          <span className="ml-2 text-[10px] font-normal text-[#667085] normal-case tracking-normal">
+            ({section.lines.length} {section.lines.length === 1 ? "line" : "lines"} · {formatUsd(section.adjustedBudget)} adjusted · {formatPct(pctTotal)} drawn)
+          </span>
+        </td>
+      </tr>
+
+      {section.lines.map((line) => (
+        <LineRow key={line.id} line={line} />
+      ))}
+
+      <tr className="bg-nurock-gray/40 font-semibold">
+        <td className="px-3 py-2.5"></td>
+        <td className="px-3 py-2.5 pl-6 font-display text-[10.5px] uppercase tracking-wide text-nurock-slate sticky left-0 z-10 bg-[#EFF1F4]">
+          Subtotal · {sectionDisplay}
+        </td>
+        <CellMoney value={section.originalBudget} bold />
+        <CellMoney value={section.adjustments} signed />
+        <CellMoney value={section.adjustedBudget} bold />
+        <CellMoney value={section.priorDraws} />
+        <CellMoney value={section.thisDraw} bold />
+        <CellMoney value={section.totalToDate} bold />
+        <CellMoney value={section.balance} bold />
+        <td className="px-3 py-2.5 text-right font-mono tabular-nums">
+          {section.adjustedBudget > 0 ? formatPct(pctTotal) : "—"}
+        </td>
+      </tr>
+    </>
+  );
+}
+
+function LineRow({ line }: { line: ActiveDrawLine }) {
+  return (
+    <tr className="hover:bg-[#FAFBFC]">
+      <td className="px-3 py-2 text-right font-mono tabular-nums text-[#98A2B3]">
+        {line.itemNumber}
+      </td>
+      <td className="px-3 py-2 pl-6 sticky left-0 z-10 bg-white">
+        {line.description}
+        {line.glAccounts.length > 0 && (
+          <span className="ml-2 text-[10px] text-[#98A2B3]">
+            ({line.glAccounts.length} GL{line.glAccounts.length === 1 ? "" : "s"})
+          </span>
+        )}
+      </td>
+      <CellMoney value={line.originalBudget} />
+      <CellMoney value={line.adjustments} signed />
+      <CellMoney value={line.adjustedBudget} />
+      <CellMoney value={line.priorDraws} />
+      <CellMoney value={line.thisDraw} bold />
+      <CellMoney value={line.totalToDate} bold />
+      <CellMoney value={line.balance} />
+      <td className="px-3 py-2 text-right font-mono tabular-nums text-[#667085]">
+        {line.adjustedBudget > 0 && line.totalToDate > 0
+          ? formatPct(line.pctTotal)
+          : "—"}
+      </td>
+    </tr>
+  );
+}
+
+function GrandTotalRow({ rollup }: { rollup: ActiveDrawRollup }) {
+  const t = rollup.totals;
+  return (
+    <tr className="bg-nurock-navy font-semibold text-white">
+      <td className="px-3 py-3"></td>
+      <td className="px-3 py-3 font-display text-[11px] uppercase tracking-[0.06em] sticky left-0 z-10 bg-nurock-navy">
+        Total Development Cost
+        <span className="ml-2 text-[10px] font-normal opacity-70">
+          ({rollup.diagnostics.scheduleLineCount} schedule lines)
+        </span>
+      </td>
+      <td className="px-3 py-3 text-right font-mono tabular-nums">{formatUsd(t.originalBudget)}</td>
+      <td className="px-3 py-3 text-right font-mono tabular-nums">{formatUsd(t.adjustments, { signed: true })}</td>
+      <td className="px-3 py-3 text-right font-mono tabular-nums">{formatUsd(t.adjustedBudget)}</td>
+      <td className="px-3 py-3 text-right font-mono tabular-nums">{formatUsd(t.priorDraws)}</td>
+      <td className="px-3 py-3 text-right font-mono tabular-nums">{formatUsd(t.thisDraw)}</td>
+      <td className="px-3 py-3 text-right font-mono tabular-nums">{formatUsd(t.totalToDate)}</td>
+      <td className="px-3 py-3 text-right font-mono tabular-nums">{formatUsd(t.balance)}</td>
+      <td className="px-3 py-3 text-right font-mono tabular-nums">{formatPct(t.pctTotal)}</td>
+    </tr>
+  );
+}
+
+// =============================================================================
+// Empty + diagnostics
+// =============================================================================
+
+function NoActiveDrawCard() {
+  return (
+    <Card className="mb-5 border-blue-200">
+      <CardBody className="py-12 text-center">
+        <Circle className="mx-auto mb-3 h-8 w-8 text-blue-400" />
+        <div className="font-display text-[16px] font-semibold text-nurock-slate">
+          No draws started yet for this deal
+        </div>
+        <div className="mx-auto mt-2 max-w-[440px] text-[12.5px] leading-relaxed text-[#667085]">
+          Once a draw is created in <code className="font-mono text-[11px]">dm_draws</code>, this page
+          renders it as the active draw. The newest non-funded draw is selected by default; pass{" "}
+          <code className="font-mono text-[11px]">?draw=&lt;id&gt;</code> to view a specific one.
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+function DiagnosticsCard({ rollup }: { rollup: ActiveDrawRollup }) {
+  const d = rollup.diagnostics;
+  return (
+    <Card className="bg-nurock-gray/30">
+      <CardBody className="py-4">
+        <div className="grid grid-cols-2 gap-3 text-[11.5px] md:grid-cols-3 lg:grid-cols-6">
+          <DiagStat label="Schedule Lines" value={String(d.scheduleLineCount)} />
+          <DiagStat label="This Draw Lines" value={String(d.drawLineCountThisDraw)} />
+          <DiagStat label="Prior Draw Lines" value={String(d.drawLineCountPrior)} />
+          <DiagStat label="Draws Total" value={String(rollup.drawCount.total)} />
+          <DiagStat label="Submitted" value={String(rollup.drawCount.submitted)} />
+          <DiagStat label="Funded" value={String(rollup.drawCount.funded)} />
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+function DiagStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div>
+      <div className="font-display text-[9.5px] uppercase tracking-wider text-[#667085]">{label}</div>
+      <div className="mt-0.5 font-mono text-[14px] font-semibold text-nurock-black">{value}</div>
+    </div>
+  );
+}
+
+// =============================================================================
+// Atoms
+// =============================================================================
+
+function CellMoney({
+  value,
+  bold = false,
+  signed = false,
+}: {
+  value: number;
+  bold?: boolean;
+  signed?: boolean;
+}) {
+  if (value === 0) {
+    return (
+      <td className="px-3 py-2 text-right font-mono tabular-nums">
+        <span className="text-[#98A2B3]">—</span>
+      </td>
+    );
+  }
+  return (
+    <td className={`px-3 py-2 text-right font-mono tabular-nums ${bold ? "font-semibold" : ""}`}>
+      {formatUsd(value, { signed })}
+    </td>
+  );
+}
+
+function HeaderCell({
+  children,
+  align = "left",
+  className = "",
+}: {
+  children: React.ReactNode;
+  align?: "left" | "right";
+  className?: string;
+}) {
+  return (
+    <th
+      className={`whitespace-nowrap border-b border-[#E4E7EC] bg-[#FAFBFC] px-3 py-2.5 font-display text-[10px] font-semibold uppercase tracking-[0.08em] text-nurock-slate text-${align} ${className}`}
+    >
+      {children}
+    </th>
+  );
+}
+
+function formatSectionName(snake: string): string {
+  return snake.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+function formatUsd(n: number, opts: { signed?: boolean } = {}): string {
+  if (n === 0 && !opts.signed) return "—";
+  const sign = n < 0 ? "−" : opts.signed && n > 0 ? "+" : "";
+  const abs = Math.abs(n);
+  return `${sign}$${abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatPct(n: number): string {
+  return `${n.toFixed(2)}%`;
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function formatDateRange(start: string, end: string): string {
+  return `${formatDate(start)} – ${formatDate(end)}`;
+}
