@@ -78,7 +78,7 @@ export default function DealHeader({
           ROW 1 — Identity (mirror of UW Header.tsx row 1)
           ============================================================ */}
       <div className="border-b border-white/10">
-        <div className="max-w-[1600px] mx-auto px-5 flex items-center justify-between gap-4 min-h-[44px]">
+        <div className="max-w-[1600px] mx-auto px-3 md:px-5 flex items-center justify-between gap-4 min-h-[44px]">
           <div className="flex items-center gap-3 min-w-0">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -88,7 +88,7 @@ export default function DealHeader({
               width={160}
               height={128}
             />
-            <div className="min-w-0 flex-shrink-0">
+            <div className="min-w-0 flex-shrink-0 hidden sm:block">
               <div className="font-display text-sm uppercase tracking-[0.14em] leading-tight">
                 NuRock
               </div>
@@ -97,19 +97,13 @@ export default function DealHeader({
               </div>
             </div>
 
-            {/* Module switcher */}
+            {/* Module switcher. The deal/project switcher moved DOWN to the
+                Layer 2 context ribbon so Layer 1 stays purely global (logo +
+                app routing + user utilities) and identical across every module
+                — and so the long project name never collides with the right
+                cluster. See docs/shell.md (two-layer master shell). */}
             <div className="ml-3 pl-3 border-l border-white/15">
               <ModuleSwitcher dealId={dealId} />
-            </div>
-
-            {/* Deal switcher */}
-            <div className="ml-3 pl-3 border-l border-white/15 min-w-0">
-              <DealSwitcher
-                activeDealId={dealId}
-                activeDealName={dealName}
-                activeDealStage={dealStage}
-                deals={deals}
-              />
             </div>
           </div>
 
@@ -118,7 +112,9 @@ export default function DealHeader({
               The account menu folds the old email + SIGN OUT into one dropdown
               that also surfaces Users & Access for org admins. */}
           <div className="flex items-center gap-2 flex-shrink-0">
-            <SaveStatus savedAt={savedAt} />
+            <div className="hidden md:block">
+              <SaveStatus savedAt={savedAt} />
+            </div>
             <div className="pl-2 ml-1 border-l border-white/15 flex items-center gap-2">
               {notificationsBell}
               <AccountMenu
@@ -132,11 +128,19 @@ export default function DealHeader({
       </div>
 
       {/* ============================================================
-          ROW 2 — Workspace KPIs (left) + tools cluster (right)
+          LAYER 2 — Contextual project ribbon: project selector (always
+          visible, full single line) + module vitals (md+) + tools (md+).
           ============================================================ */}
-      <div className="max-w-[1600px] mx-auto px-5 flex items-center justify-between gap-4 min-h-[44px]">
-        {/* Left — KPI chips (terse currency to match UW HudPill widths) */}
-        <div className="flex items-center gap-1.5 flex-wrap">
+      <div className="max-w-[1600px] mx-auto px-3 md:px-5 flex items-center justify-between gap-3 min-h-[44px]">
+        {/* Left — project selector + KPI chips (terse currency, md+) */}
+        <div className="flex items-center gap-3 min-w-0">
+          <DealSwitcher
+            activeDealId={dealId}
+            activeDealName={dealName}
+            activeDealStage={dealStage}
+            deals={deals}
+          />
+          <div className="hidden md:flex items-center gap-1.5 flex-wrap md:pl-3 md:border-l md:border-white/15">
           <HudChip
             label="TDC"
             value={formatCurrencyTerse(totalDevCost)}
@@ -195,11 +199,14 @@ export default function DealHeader({
             }
             tone="neutral"
           />
+          </div>
         </div>
 
-        {/* Right — Tools cluster. Mirror of UW row 2's RATES/HUD/LOG/VERSIONS/⚙
-            cluster shape, with devmgmt-relevant actions. See docs/shell.md §6. */}
-        <ToolsCluster dealId={dealId} />
+        {/* Right — Tools cluster (md+). Mirror of UW row 2's
+            RATES/HUD/LOG/VERSIONS/⚙ cluster shape. See docs/shell.md §6. */}
+        <div className="hidden md:flex">
+          <ToolsCluster dealId={dealId} />
+        </div>
       </div>
     </header>
   );
