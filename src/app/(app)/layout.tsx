@@ -24,18 +24,25 @@ export default async function AppLayout({
 
   if (!user) redirect("/login");
 
-  // Module gate (Phase 9 r2) — a user needs a Development role (or org admin)
-  // to enter. BOOTSTRAP-SAFE: if no role assignments exist yet, enforcement
-  // stays off so the app can't lock everyone out before roles are seeded.
+  // Module gate — a user needs a Diligence role (the finance-team role) OR a
+  // Development role (existing staff) OR org admin to enter. Accepting either
+  // means existing dev-mgmt users keep access while finance-only users can be
+  // granted a diligence-only role (no dev-mgmt permissions). BOOTSTRAP-SAFE: if
+  // no role assignments exist yet, enforcement stays off.
+  const canEnter = (a: typeof access) =>
+    canAccessModule(a, "diligence") ||
+    canAccessModule(a, "devmgmt") ||
+    !!a?.isOrgAdmin;
+
   let access = await getCurrentUserAccess();
-  let denied = !canAccessModule(access, "devmgmt") && !access?.isOrgAdmin;
+  let denied = !canEnter(access);
   // If denied, the user may have a pending email invite — claim it and re-check
   // before turning them away (r5 auto-link on first sign-in).
   if (denied) {
     const claimed = await claimPendingInvite();
     if (claimed) {
       access = await getCurrentUserAccess();
-      denied = !canAccessModule(access, "devmgmt") && !access?.isOrgAdmin;
+      denied = !canEnter(access);
     }
   }
   if (denied && (await isRbacInitialized())) {

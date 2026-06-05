@@ -15,7 +15,7 @@ import { getCurrentUserAccess } from "@/lib/auth/access";
 // here (by user_id) and assigns a role per module.
 // =============================================================================
 
-const MODULES = new Set(["devmgmt", "underwriting"]);
+const MODULES = new Set(["devmgmt", "underwriting", "diligence"]);
 const ROLES = new Set(["admin", "manager", "contributor", "viewer"]);
 
 type UntypedSb = {
@@ -225,6 +225,7 @@ export async function inviteUser(input: {
   displayName: string;
   devmgmtRole: string | null;
   underwritingRole: string | null;
+  diligenceRole: string | null;
 }): Promise<{ success?: true; alreadyActive?: boolean; error?: string }> {
   const ctx = await requireAdmin();
   if ("error" in ctx) return ctx;
@@ -235,7 +236,9 @@ export async function inviteUser(input: {
     return { error: "Unknown Development role." };
   if (input.underwritingRole && !ROLES.has(input.underwritingRole))
     return { error: "Unknown Underwriting role." };
-  if (!input.devmgmtRole && !input.underwritingRole)
+  if (input.diligenceRole && !ROLES.has(input.diligenceRole))
+    return { error: "Unknown Diligence role." };
+  if (!input.devmgmtRole && !input.underwritingRole && !input.diligenceRole)
     return { error: "Pick a role in at least one module." };
 
   const sb = ctx.supabase as unknown as UntypedSb;
@@ -246,6 +249,7 @@ export async function inviteUser(input: {
       display_name: input.displayName.trim() || null,
       devmgmt_role: input.devmgmtRole,
       underwriting_role: input.underwritingRole,
+      diligence_role: input.diligenceRole,
       invited_by: ctx.access.userId,
       claimed_at: null,
       claimed_user_id: null,
@@ -264,6 +268,7 @@ export async function inviteUser(input: {
   if (existingId) {
     await applyModuleRole(sb, existingId, "devmgmt", input.devmgmtRole, ctx.access.userId);
     await applyModuleRole(sb, existingId, "underwriting", input.underwritingRole, ctx.access.userId);
+    await applyModuleRole(sb, existingId, "diligence", input.diligenceRole, ctx.access.userId);
     await sb
       .from("app_user_invites")
       .update({ claimed_at: new Date().toISOString(), claimed_user_id: existingId })

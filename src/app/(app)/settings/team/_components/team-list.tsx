@@ -28,6 +28,7 @@ export interface TeamMember {
   email: string | null;
   devmgmtRole: string | null;
   underwritingRole: string | null;
+  diligenceRole: string | null;
 }
 
 export interface PendingInvite {
@@ -35,6 +36,7 @@ export interface PendingInvite {
   displayName: string | null;
   devmgmtRole: string | null;
   underwritingRole: string | null;
+  diligenceRole: string | null;
 }
 
 const ROLE_OPTIONS: { value: string; label: string }[] = [
@@ -109,6 +111,7 @@ export default function TeamList({
             <tr className="border-b border-nurock-border">
               <th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider font-display text-nurock-slate">Name</th>
               <th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider font-display text-nurock-slate">Email</th>
+              <th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider font-display text-nurock-slate w-44">Diligence</th>
               <th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider font-display text-nurock-slate w-44">Development</th>
               <th className="px-4 py-2 text-left text-[10px] uppercase tracking-wider font-display text-nurock-slate w-44">Underwriting</th>
               <th className="px-4 py-2 text-right text-[10px] uppercase tracking-wider font-display text-nurock-slate w-16" />
@@ -117,7 +120,7 @@ export default function TeamList({
           <tbody className="divide-y divide-nurock-border">
             {members.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-sm text-nurock-slate-light">
+                <td colSpan={6} className="px-4 py-8 text-center text-sm text-nurock-slate-light">
                   No users yet. Click Invite user to get started.
                 </td>
               </tr>
@@ -133,6 +136,9 @@ export default function TeamList({
                     </div>
                   </td>
                   <td className="px-4 py-2 text-nurock-slate text-xs font-mono">{m.email || "—"}</td>
+                  <td className="px-4 py-2">
+                    <RoleSelect value={m.diligenceRole ?? ""} disabled={isPending} onChange={(v) => handleRoleChange(m.userId, "diligence", v)} />
+                  </td>
                   <td className="px-4 py-2">
                     <RoleSelect value={m.devmgmtRole ?? ""} disabled={isPending} onChange={(v) => handleRoleChange(m.userId, "devmgmt", v)} />
                   </td>
@@ -175,7 +181,7 @@ export default function TeamList({
                     ) : null}
                   </td>
                   <td className="px-4 py-2 text-[11px] text-nurock-slate">
-                    Dev: {roleLabel(inv.devmgmtRole)} · UW: {roleLabel(inv.underwritingRole)}
+                    Dil: {roleLabel(inv.diligenceRole)} · Dev: {roleLabel(inv.devmgmtRole)} · UW: {roleLabel(inv.underwritingRole)}
                   </td>
                   <td className="px-4 py-2 text-right">
                     <Button
@@ -275,6 +281,7 @@ function InviteDialog({
 }) {
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [dilRole, setDilRole] = useState("");
   const [devRole, setDevRole] = useState("");
   const [uwRole, setUwRole] = useState("");
   const [isPending, startTransition] = useTransition();
@@ -282,6 +289,7 @@ function InviteDialog({
   function reset() {
     setEmail("");
     setDisplayName("");
+    setDilRole("");
     setDevRole("");
     setUwRole("");
   }
@@ -293,6 +301,7 @@ function InviteDialog({
         displayName: displayName.trim(),
         devmgmtRole: devRole || null,
         underwritingRole: uwRole || null,
+        diligenceRole: dilRole || null,
       });
       if ("error" in result && result.error) {
         toast.error(result.error);
@@ -310,7 +319,9 @@ function InviteDialog({
   }
 
   const canSubmit =
-    email.trim().includes("@") && (devRole !== "" || uwRole !== "") && !isPending;
+    email.trim().includes("@") &&
+    (dilRole !== "" || devRole !== "" || uwRole !== "") &&
+    !isPending;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -343,6 +354,22 @@ function InviteDialog({
               placeholder="e.g. Jane Smith"
               disabled={isPending}
             />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Diligence role</Label>
+            <select
+              value={dilRole}
+              onChange={(e) => setDilRole(e.target.value)}
+              disabled={isPending}
+              className="w-full h-9 rounded border border-nurock-border bg-white px-2 text-sm"
+            >
+              {ROLE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            <p className="text-[11px] text-nurock-slate-light">
+              Finance-team access to this app only — no Development permissions.
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">

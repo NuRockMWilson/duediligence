@@ -41,7 +41,7 @@ export default async function TeamPage() {
       sb.from("app_user_roles").select("user_id, module, role_key"),
       sb
         .from("app_user_invites")
-        .select("email, display_name, devmgmt_role, underwriting_role, created_at")
+        .select("email, display_name, devmgmt_role, underwriting_role, diligence_role, created_at")
         .is("claimed_at", null)
         .order("created_at", { ascending: true }),
     ]);
@@ -84,6 +84,7 @@ export default async function TeamPage() {
     email: u.email,
     devmgmtRole: rolesByUser[u.user_id]?.devmgmt ?? null,
     underwritingRole: rolesByUser[u.user_id]?.underwriting ?? null,
+    diligenceRole: rolesByUser[u.user_id]?.diligence ?? null,
   }));
 
   const invites = (
@@ -92,12 +93,14 @@ export default async function TeamPage() {
       display_name: string | null;
       devmgmt_role: string | null;
       underwriting_role: string | null;
+      diligence_role: string | null;
     }>
   ).map((i) => ({
     email: i.email,
     displayName: i.display_name,
     devmgmtRole: i.devmgmt_role,
     underwritingRole: i.underwriting_role,
+    diligenceRole: i.diligence_role,
   }));
 
   return (

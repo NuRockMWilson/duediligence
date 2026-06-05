@@ -15,7 +15,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 
-export type ModuleKey = "underwriting" | "devmgmt";
+export type ModuleKey = "underwriting" | "devmgmt" | "diligence";
 export type ActionKey = "view" | "edit" | "approve" | "export" | "manage_users";
 
 export interface UserAccess {
