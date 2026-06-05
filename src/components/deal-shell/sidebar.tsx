@@ -15,7 +15,7 @@ export default function DealSidebar({ dealId }: { dealId: string }) {
     // visible even on short viewports — sidebar scrolls internally rather
     // than running off-screen. self-start prevents flex-stretch from
     // pinning the sidebar to the (potentially very tall) main content.
-    <aside className="w-[220px] shrink-0 bg-white border-r border-nurock-border py-4 sticky top-[120px] self-start max-h-[calc(100vh-120px)] overflow-y-auto">
+    <aside className="w-[220px] shrink-0 bg-white border-r border-nurock-border py-4 sticky top-[88px] self-start max-h-[calc(100vh-88px)] overflow-y-auto">
       {/* Cross-app navigation — back to the model's portfolio dashboard.
           Portfolio is the single home for the platform; clicking this
           jumps from dev mgmt back to the deals list in the model.

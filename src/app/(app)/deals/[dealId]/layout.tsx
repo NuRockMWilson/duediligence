@@ -2,7 +2,6 @@ import { redirect, notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import DealHeader from "@/components/deal-shell/header";
 import DealSidebar from "@/components/deal-shell/sidebar";
-import DealBreadcrumb from "@/components/deal-shell/breadcrumb";
 import { NotificationsBell } from "@/components/notifications-bell";
 import { getCurrentUserAccess } from "@/lib/auth/access";
 
@@ -55,7 +54,6 @@ export default async function DealLayout({
         savedAt={Date.now()}
         notificationsBell={<NotificationsBell />}
       />
-      <DealBreadcrumb dealName={deal.name} dealId={dealId} />
       {/* Bumped from max-w-[1600px] to 1920 so main content extends further
           right on wide monitors (sidebar 200px + ~1720px main). Keeps parity
           with UW where the same canvas without a sidebar uses full width.
