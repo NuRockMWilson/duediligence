@@ -1,20 +1,18 @@
 "use client";
 
 // =============================================================================
-// ModuleSwitcher (devmgmt side)
+// ModuleSwitcher (diligence side)
 // =============================================================================
-// Mirror of nurock-underwriting/components/ModuleSwitcher.tsx. The two files
-// implement the SAME contract documented in docs/shell.md — if you change one,
-// change the other.
+// Mirror of nurock-underwriting/components/ModuleSwitcher.tsx — the SAME shell
+// contract (docs/shell.md §2): the ACTIVE module shows icon + label on a tan
+// pill; every other module collapses to an icon-only square with a tooltip, so
+// the switcher stays compact. If you change the switcher here, change the UW +
+// devmgmt copies too.
 //
-//   Underwriting → Development (active here) → Cost Cert (soon)
-//
-// Active = Development (this app). Cross-app links to Underwriting via
-// NEXT_PUBLIC_UNDERWRITING_URL, with section preservation (cert-prep → UW's
-// cost-cert tab).
+//   Underwriting → Development → Diligence (active here) → Cost Cert (soon)
 // =============================================================================
 
-import { ChevronRight } from "lucide-react";
+import { Building2, Calculator, ClipboardCheck, FileCheck2 } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 export type ModuleKey =
@@ -35,14 +33,16 @@ const DEVELOPMENT_BASE =
   process.env.NEXT_PUBLIC_DEVMGMT_URL ?? "https://nurock-devmgmt.vercel.app";
 
 /**
- * Derive the deep-link tab on the UW side from the current devmgmt path.
- * If you're on cert-prep, send the user to UW's Cost Cert tab.
- * Otherwise, no specific tab — UW lands on its default tab.
+ * Derive the deep-link tab on the UW side from the current path.
+ * cert-prep → UW's Cost Cert tab; otherwise UW lands on its default tab.
  */
 function uwSectionFromPath(pathname: string): string | null {
   if (pathname.includes("/cert-prep")) return "cost-cert";
   return null;
 }
+
+const ICON_BOX =
+  "flex items-center justify-center w-8 h-8 rounded transition-colors";
 
 export function ModuleSwitcher({ dealId }: { dealId?: string }) {
   const pathname = usePathname() ?? "";
@@ -56,77 +56,71 @@ export function ModuleSwitcher({ dealId }: { dealId?: string }) {
     ? `${DEVELOPMENT_BASE}/deals/${encodeURIComponent(dealId)}/dashboard`
     : null;
 
-  // IMPORTANT: <button> and <a> elements don't inherit text-transform from
-  // a parent div in Chrome's UA stylesheet — each chip needs its own
-  // `uppercase` class. Without it the active button renders sentence-case
-  // even though the parent has `uppercase`.
   return (
-    <div className="flex items-center gap-0.5 text-[10px] font-display tracking-wider whitespace-nowrap">
-      {/* Underwriting — cross-app live link */}
-      <ChipLink
-        label="Underwriting"
+    <div className="flex items-center gap-1 font-display uppercase tracking-wider whitespace-nowrap">
+      {/* Underwriting — icon-only cross-app link. */}
+      <ModuleIcon
+        Icon={Calculator}
         href={uwUrl}
-        disabledTitle="Select a deal first to navigate cross-module"
         liveTitle="Open this deal in the Underwriting module"
+        disabledTitle="Underwriting — select a deal first to navigate cross-module"
       />
 
-      <ChevronRight className="w-3 h-3 text-white/20 mx-0.5" aria-hidden />
-
-      {/* Development — cross-app live link to dev-mgmt */}
-      <ChipLink
-        label="Development"
+      {/* Development — icon-only cross-app link to dev-mgmt. */}
+      <ModuleIcon
+        Icon={Building2}
         href={devUrl}
-        disabledTitle="Select a deal first to navigate cross-module"
         liveTitle="Open this deal in the Development module"
+        disabledTitle="Development — select a deal first to navigate cross-module"
       />
 
-      <ChevronRight className="w-3 h-3 text-white/20 mx-0.5" aria-hidden />
-
-      {/* Diligence — active (this app) */}
+      {/* Diligence — active (this app): icon + label on the tan pill. */}
       <button
         type="button"
-        className="px-2.5 py-1 rounded bg-nurock-tan text-nurock-navy-dark font-semibold cursor-default uppercase tracking-wider"
+        className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-nurock-tan text-nurock-navy-dark font-semibold cursor-default uppercase tracking-wider text-[10px]"
         title="Diligence module — currently active"
         aria-current="page"
       >
-        Diligence
+        <ClipboardCheck className="w-3.5 h-3.5" aria-hidden />
+        <span>Diligence</span>
       </button>
 
-      <ChevronRight className="w-3 h-3 text-white/20 mx-0.5" aria-hidden />
-
-      {/* Cost Cert — coming soon */}
+      {/* Cost Cert — coming soon (icon-only, disabled). */}
       <button
         type="button"
         disabled
-        className="px-2.5 py-1 rounded bg-white/5 text-white/40 border border-white/10 cursor-not-allowed flex items-center gap-1.5 uppercase tracking-wider"
+        className={`${ICON_BOX} bg-white/5 text-white/30 border border-white/10 cursor-not-allowed`}
         title="Cost Cert module — coming soon"
+        aria-label="Cost Cert — coming soon"
       >
-        <span>Cost Cert</span>
-        <span className="text-[8px] tracking-widest text-nurock-tan">Soon</span>
+        <FileCheck2 className="w-3.5 h-3.5" aria-hidden />
       </button>
     </div>
   );
 }
 
-function ChipLink({
-  label,
+// Icon-only chip for a non-active module — links cross-app when a deal is
+// selected, else renders disabled with a tooltip.
+function ModuleIcon({
+  Icon,
   href,
-  disabledTitle,
   liveTitle,
+  disabledTitle,
 }: {
-  label: string;
+  Icon: typeof Calculator;
   href: string | null;
-  disabledTitle: string;
   liveTitle: string;
+  disabledTitle: string;
 }) {
   if (href) {
     return (
       <a
         href={href}
-        className="px-2.5 py-1 rounded bg-white/5 hover:bg-white/15 text-white/85 hover:text-white border border-white/10 hover:border-white/30 transition-colors uppercase tracking-wider"
+        className={`${ICON_BOX} bg-white/5 hover:bg-white/15 text-white/85 hover:text-white border border-white/10 hover:border-white/30`}
         title={liveTitle}
+        aria-label={liveTitle}
       >
-        {label}
+        <Icon className="w-3.5 h-3.5" aria-hidden />
       </a>
     );
   }
@@ -134,10 +128,11 @@ function ChipLink({
     <button
       type="button"
       disabled
-      className="px-2.5 py-1 rounded bg-white/5 text-white/40 border border-white/10 cursor-not-allowed uppercase tracking-wider"
+      className={`${ICON_BOX} bg-white/5 text-white/40 border border-white/10 cursor-not-allowed`}
       title={disabledTitle}
+      aria-label={disabledTitle}
     >
-      {label}
+      <Icon className="w-3.5 h-3.5" aria-hidden />
     </button>
   );
 }
