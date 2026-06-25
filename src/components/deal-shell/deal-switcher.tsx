@@ -17,9 +17,9 @@
 // underwriting-blue dot (the most common stage by far).
 // =============================================================================
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { ChevronDown, Check } from "lucide-react";
+import { ChevronDown, Check, Search } from "lucide-react";
 
 export interface DealOption {
   id: string;
@@ -64,8 +64,23 @@ export function DealSwitcher({
   const router = useRouter();
   const pathname = usePathname() ?? "";
   const [open, setOpen] = useState(false);
+  // Dropdown filters — default shows ALL deals; search by name + narrow to a
+  // single stage.
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const wrapperRef = useRef<HTMLDivElement>(null);
   const stageMeta = metaFor(activeDealStage);
+
+  const q = search.trim().toLowerCase();
+  const filteredDeals = useMemo(
+    () =>
+      deals.filter((d) => {
+        if (statusFilter !== "all" && (d.stage ?? "underwriting") !== statusFilter) return false;
+        if (!q) return true;
+        return d.name.toLowerCase().includes(q);
+      }),
+    [deals, statusFilter, q]
+  );
 
   // Outside click + Escape to close
   useEffect(() => {
@@ -84,6 +99,11 @@ export function DealSwitcher({
       document.removeEventListener("mousedown", onClick);
       document.removeEventListener("keydown", onKey);
     };
+  }, [open]);
+
+  // Reset the filters whenever the dropdown closes.
+  useEffect(() => {
+    if (!open) { setSearch(""); setStatusFilter("all"); }
   }, [open]);
 
   // Build the target URL for a deal swap: keep the section if the current
@@ -135,13 +155,39 @@ export function DealSwitcher({
               Switch Deal
             </div>
           </div>
+          {/* Search + status filter — default shows all deals. */}
+          <div className="p-2 border-b border-nurock-border space-y-1.5">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-nurock-slate-light pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search deals…"
+                className="w-full text-xs rounded border border-nurock-border pl-7 pr-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-nurock-navy"
+                autoFocus
+              />
+            </div>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="w-full text-xs rounded border border-nurock-border px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-nurock-navy"
+            >
+              <option value="all">All statuses ({deals.length})</option>
+              {Object.keys(STAGE_META).map((key) => {
+                const n = deals.filter((d) => (d.stage ?? "underwriting") === key).length;
+                if (n === 0) return null;
+                return <option key={key} value={key}>{STAGE_META[key].label} ({n})</option>;
+              })}
+            </select>
+          </div>
           <div className="max-h-[360px] overflow-y-auto">
-            {deals.length === 0 ? (
+            {filteredDeals.length === 0 ? (
               <div className="px-3 py-4 text-xs text-nurock-slate-light italic text-center">
-                No other deals available.
+                No deals match your filters.
               </div>
             ) : (
-              deals.map((d) => {
+              filteredDeals.map((d) => {
                 const isActive = d.id === activeDealId;
                 const rowMeta = metaFor(d.stage);
                 return (
