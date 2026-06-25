@@ -100,13 +100,20 @@ export default function DealHeader({
               </div>
             </div>
 
-            {/* Module switcher. The deal/project switcher moved DOWN to the
-                Layer 2 context ribbon so Layer 1 stays purely global (logo +
-                app routing + user utilities) and identical across every module
-                — and so the long project name never collides with the right
-                cluster. See docs/shell.md (two-layer master shell). */}
+            {/* Module switcher + deal switcher BOTH live in row 1 (next to the
+                wordmark), matching the underwriting model's top bar so the deal
+                context sits in the same place across every module. The deal
+                name truncates so it never collides with the right cluster. */}
             <div className="ml-3 pl-3 border-l border-white/15">
               <ModuleSwitcher dealId={dealId} />
+            </div>
+            <div className="ml-3 pl-3 border-l border-white/15 min-w-0">
+              <DealSwitcher
+                activeDealId={dealId}
+                activeDealName={dealName}
+                activeDealStage={dealStage}
+                deals={deals}
+              />
             </div>
           </div>
 
@@ -134,16 +141,11 @@ export default function DealHeader({
           LAYER 2 — Contextual project ribbon: project selector (always
           visible, full single line) + module vitals (md+) + tools (md+).
           ============================================================ */}
-      <div className="max-w-[1600px] mx-auto px-3 md:px-5 flex items-center justify-between gap-3 min-h-[44px]">
-        {/* Left — project selector + KPI chips (terse currency, md+) */}
+      <div className="hidden md:flex max-w-[1600px] mx-auto px-3 md:px-5 items-center justify-between gap-3 min-h-[44px]">
+        {/* Left — module vitals (KPI chips). The deal switcher moved UP to row 1
+            to match the underwriting model; row 2 now carries vitals + tools. */}
         <div className="flex items-center gap-3 min-w-0">
-          <DealSwitcher
-            activeDealId={dealId}
-            activeDealName={dealName}
-            activeDealStage={dealStage}
-            deals={deals}
-          />
-          <div className="hidden md:flex items-center gap-1.5 flex-wrap md:pl-3 md:border-l md:border-white/15">
+          <div className="flex items-center gap-1.5 flex-wrap">
           <HudChip
             label="TDC"
             value={formatCurrencyTerse(totalDevCost)}
