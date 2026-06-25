@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowLeft, Calendar, ArrowRightLeft, Network, Users, Shield, Building2, ClipboardList } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
+import { SETTINGS_NAV } from "@/lib/settings-nav";
 
 /**
  * Phase 5 — Settings shell. Org-level configuration that flows through to
@@ -11,69 +12,12 @@ import { ArrowLeft, Calendar, ArrowRightLeft, Network, Users, Shield, Building2,
  * the same: 220px sidebar, top-block with Portfolio back-link, group
  * headers, identical nav item styling with active state.
  *
- * Sections will grow in subsequent rounds (Reporting Templates, Vendor
- * Master, Standard Milestones, etc.). Each lives at /settings/<section>.
+ * The section list lives in lib/settings-nav.ts (single source of truth), so
+ * this sidebar and the top-bar account-menu dropdown can never drift apart.
+ * Add/remove a section there and both surfaces update together.
  */
 
-interface SettingsNavItem {
-  href: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  badge?: { label: string; tone: "navy" | "tan" };
-}
-
-interface SettingsNavGroup {
-  label: string;
-  items: SettingsNavItem[];
-}
-
-const NAV: SettingsNavGroup[] = [
-  {
-    label: "Configuration",
-    items: [
-      {
-        href: "/settings/standard-schedule",
-        label: "Report Formats",
-        icon: Calendar,
-      },
-      {
-        href: "/settings/mappings/underwriting-lines",
-        label: "Underwriting Line → GL",
-        icon: ArrowRightLeft,
-      },
-      {
-        href: "/settings/mappings/gl-to-standard",
-        label: "Chart of Accounts & Groupings",
-        icon: Network,
-      },
-      {
-        href: "/settings/vendors",
-        label: "Vendors & Subs",
-        icon: Building2,
-      },
-      {
-        href: "/settings/diligence-templates",
-        label: "Diligence Templates",
-        icon: ClipboardList,
-      },
-    ],
-  },
-  {
-    label: "Administration",
-    items: [
-      {
-        href: "/settings/team",
-        label: "Users & Access",
-        icon: Users,
-      },
-      {
-        href: "/settings/admin",
-        label: "Admin",
-        icon: Shield,
-      },
-    ],
-  },
-];
+const NAV = SETTINGS_NAV;
 
 export default function SettingsLayout({
   children,
@@ -112,19 +56,20 @@ export default function SettingsLayout({
               </div>
               {group.items.map((item) => {
                 const Icon = item.icon;
+                // External (cross-app to devmgmt) items never match the local
+                // pathname, so they're never "active" and render as a plain
+                // anchor for a full cross-origin navigation.
                 const active =
-                  pathname === item.href ||
-                  pathname.startsWith(item.href + "/");
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={`flex items-center gap-2.5 px-5 py-2 transition relative ${
-                      active
-                        ? "bg-nurock-navy/5 text-nurock-navy font-semibold border-l-2 border-nurock-navy -ml-[2px] pl-[18px]"
-                        : "text-nurock-slate hover:bg-nurock-gray hover:text-nurock-black"
-                    }`}
-                  >
+                  !item.external &&
+                  (pathname === item.href ||
+                    pathname.startsWith(item.href + "/"));
+                const className = `flex items-center gap-2.5 px-5 py-2 transition relative ${
+                  active
+                    ? "bg-nurock-navy/5 text-nurock-navy font-semibold border-l-2 border-nurock-navy -ml-[2px] pl-[18px]"
+                    : "text-nurock-slate hover:bg-nurock-gray hover:text-nurock-black"
+                }`;
+                const inner = (
+                  <>
                     <Icon className="w-4 h-4 flex-shrink-0" />
                     <span className="truncate">{item.label}</span>
                     {item.badge && (
@@ -138,6 +83,15 @@ export default function SettingsLayout({
                         {item.badge.label}
                       </span>
                     )}
+                  </>
+                );
+                return item.external ? (
+                  <a key={item.href} href={item.href} className={className}>
+                    {inner}
+                  </a>
+                ) : (
+                  <Link key={item.href} href={item.href} className={className}>
+                    {inner}
                   </Link>
                 );
               })}

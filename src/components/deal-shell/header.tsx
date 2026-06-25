@@ -6,7 +6,11 @@
 // Row 1 (44px): logo + wordmark + module switcher + deal switcher
 //               · right cluster: Saved Xs ago + email + SIGN OUT + bell
 // Row 2 (44px): KPI chips (TDC / Drawn / Variance / Schedule)
-//               · right cluster: PACKAGE + REFRESH + AUDIT + ⚙ (settings)
+//               · right cluster: PACKAGE + REFRESH + AUDIT
+//
+// The standalone ⚙ Settings link was removed from row 2 — Settings (and every
+// section under it) now lives in the account-menu dropdown (top-right). See
+// account-menu.tsx.
 //
 // Row 1 is BYTE-FOR-BYTE identical to nurock-underwriting/components/Header.tsx
 // row 1. Row 2 layout mirrors UW's "KPI strip left, tools cluster right" shape;
@@ -18,7 +22,6 @@ import Link from "next/link";
 import {
   FileText,
   RefreshCw,
-  Settings,
   ScrollText,
 } from "lucide-react";
 import { formatCurrency, formatCurrencyTerse, formatPercent } from "@/lib/format";
@@ -203,7 +206,7 @@ export default function DealHeader({
         </div>
 
         {/* Right — Tools cluster (md+). Mirror of UW row 2's
-            RATES/HUD/LOG/VERSIONS/⚙ cluster shape. See docs/shell.md §6. */}
+            RATES/HUD/LOG/VERSIONS cluster shape. See docs/shell.md §6. */}
         <div className="hidden md:flex">
           <ToolsCluster dealId={dealId} />
         </div>
@@ -239,13 +242,8 @@ function ToolsCluster({ dealId }: { dealId: string }) {
         title="Audit trail — coming soon"
         disabled
       />
-      <Link
-        href="/settings"
-        className="w-8 h-8 rounded bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors"
-        title="Settings"
-      >
-        <Settings className="w-4 h-4 text-white" />
-      </Link>
+      {/* The ⚙ Settings link was removed here — Settings now lives in the
+          account-menu dropdown (top-right). */}
     </div>
   );
 }
