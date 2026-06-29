@@ -1,9 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { Card } from "@/components/ui/card";
-import { Users } from "lucide-react";
+import { Users, KeyRound } from "lucide-react";
 import { getCurrentUserAccess } from "@/lib/auth/access";
 import TeamList, { type TeamMember } from "./_components/team-list";
+import ProjectAccess, { type ProjectOption } from "./_components/project-access";
 
 // ============================================================================
 // Settings → Users & Access (Phase 9 r2)
@@ -103,6 +104,34 @@ export default async function TeamPage() {
     diligenceRole: i.diligence_role,
   }));
 
+  // Project Access — all non-dead deals (admin sees all via the grant-aware RLS)
+  // + current grants. Tolerant: if migration 0097 hasn't run, deal_access won't
+  // exist — fall back to a "not ready" hint instead of crashing the page.
+  const { data: dealRows } = await sb
+    .from("deals")
+    .select("id, name, stage, owner_id")
+    .neq("stage", "dead")
+    .order("updated_at", { ascending: false });
+  let accessReady = true;
+  let accessRows: Array<{ deal_id: string; user_id: string }> = [];
+  {
+    const { data: ar, error: aerr } = await sb
+      .from("deal_access")
+      .select("deal_id, user_id");
+    if (aerr) accessReady = false;
+    else accessRows = (ar ?? []) as Array<{ deal_id: string; user_id: string }>;
+  }
+  const projects: ProjectOption[] = (
+    (dealRows ?? []) as Array<{
+      id: string;
+      name: string;
+      stage: string | null;
+      owner_id: string | null;
+    }>
+  ).map((d) => ({ id: d.id, name: d.name, stage: d.stage, ownerId: d.owner_id }));
+  const grantsByDeal: Record<string, string[]> = {};
+  for (const a of accessRows) (grantsByDeal[a.deal_id] ??= []).push(a.user_id);
+
   return (
     <div className="p-8 space-y-6">
       <div className="flex items-center gap-3">
@@ -120,6 +149,29 @@ export default async function TeamPage() {
 
       <Card className="p-0 overflow-hidden">
         <TeamList members={members} invites={invites} currentUserId={access.userId} />
+      </Card>
+
+      {/* Project Access — per-project grants (migration 0097, shared with devmgmt) */}
+      <div className="flex items-center gap-3 pt-2">
+        <KeyRound className="w-6 h-6 text-nurock-navy" />
+        <div>
+          <h2 className="font-display text-xl tracking-wider text-nurock-navy">
+            Project Access
+          </h2>
+          <p className="text-sm text-nurock-slate-light">
+            Grant specific users access to specific projects. Owners and org
+            admins always have access; everyone else sees only the projects you
+            grant them here.
+          </p>
+        </div>
+      </div>
+      <Card className="p-0 overflow-hidden">
+        <ProjectAccess
+          projects={projects}
+          members={members}
+          grantsByDeal={grantsByDeal}
+          ready={accessReady}
+        />
       </Card>
 
       <div className="text-xs text-nurock-slate-light leading-relaxed">

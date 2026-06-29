@@ -190,6 +190,51 @@ export async function removeTeamMember(userId: string) {
   return { success: true };
 }
 
+/**
+ * Grant or revoke a user's access to a single project (deal). Org-admin gated.
+ * Visibility/edit reachability is enforced by the deal_access-aware RLS on
+ * `deals` (migration 0097); the user's module role still governs what they can
+ * actually do. Owners and org admins always have access implicitly and are not
+ * stored here. The deal_access table is shared with devmgmt, so a grant made in
+ * either app is the same grant.
+ */
+export async function setDealAccess(input: {
+  dealId: string;
+  userId: string;
+  grant: boolean;
+}) {
+  const ctx = await requireAdmin();
+  if ("error" in ctx) return ctx;
+  const sb = ctx.supabase as unknown as UntypedSb;
+
+  if (input.grant) {
+    const { error } = await sb.from("deal_access").upsert(
+      {
+        deal_id: input.dealId,
+        user_id: input.userId,
+        granted_by: ctx.access.userId,
+        granted_at: new Date().toISOString(),
+      },
+      { onConflict: "deal_id,user_id" }
+    );
+    if (error) {
+      if (error.code === "42P01")
+        return { error: "Run migration 0097_deal_access.sql first to enable Project Access." };
+      return { error: error.message };
+    }
+  } else {
+    const { error } = await sb
+      .from("deal_access")
+      .delete()
+      .eq("deal_id", input.dealId)
+      .eq("user_id", input.userId);
+    if (error) return { error: error.message };
+  }
+
+  revalidatePath("/settings/team");
+  return { success: true };
+}
+
 // ---- Invite by email (auto-links on first sign-in) -------------------------
 
 async function applyModuleRole(
