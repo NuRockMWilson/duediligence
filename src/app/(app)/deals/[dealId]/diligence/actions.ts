@@ -30,6 +30,7 @@ import {
   buildDiligencePacketZip,
   type PacketDoc,
 } from "@/lib/diligence/packet";
+import { logDiligenceEvent } from "@/lib/diligence/audit";
 import type { DiligenceStatus } from "@/lib/data/diligence-rollup";
 
 export type SignoffRole = "preparer" | "reviewer" | "approver";
@@ -81,6 +82,9 @@ export async function setDiligenceStatus(input: {
   }
 
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   const sb = supabase as AnySb;
 
   const patch: Record<string, unknown> = {
@@ -100,6 +104,21 @@ export async function setDiligenceStatus(input: {
     .in("id", input.dealItemIds)
     .eq("deal_id", input.dealId);
   if (error) return { error: error.message };
+
+  await logDiligenceEvent(sb, {
+    dealId: input.dealId,
+    dealItemId: input.dealItemIds.length === 1 ? input.dealItemIds[0] : null,
+    actorUserId: user?.id ?? null,
+    eventType: "status_changed",
+    summary: `Status → ${input.status}${
+      input.dealItemIds.length > 1 ? ` (${input.dealItemIds.length} items)` : ""
+    }${input.waivedReason ? ` — ${input.waivedReason.trim()}` : ""}`,
+    detail: {
+      status: input.status,
+      itemIds: input.dealItemIds,
+      waivedReason: input.waivedReason ?? null,
+    },
+  });
 
   revalidate(input.dealId);
   return {};
@@ -292,6 +311,20 @@ export async function uploadDiligenceDocument(
     .eq("deal_id", dealId)
     .eq("status", "not_started");
 
+  await logDiligenceEvent(sb, {
+    dealId,
+    dealItemId,
+    actorUserId: user?.id ?? null,
+    eventType: "document_linked",
+    summary: `Uploaded & linked "${displayName}" to "${itemTitle}"`,
+    detail: {
+      documentId: (doc as { id: string }).id,
+      displayName,
+      originalFilename: file.name,
+      via: "upload",
+    },
+  });
+
   revalidate(dealId);
   return {};
 }
@@ -319,6 +352,16 @@ export async function linkDiligenceDocument(input: {
       { onConflict: "deal_item_id,document_id", ignoreDuplicates: true }
     );
   if (error) return { error: error.message };
+
+  await logDiligenceEvent(sb, {
+    dealId: input.dealId,
+    dealItemId: input.dealItemId,
+    actorUserId: user?.id ?? null,
+    eventType: "document_linked",
+    summary: "Linked an existing library document to the item",
+    detail: { documentId: input.documentId, via: "library_link" },
+  });
+
   revalidate(input.dealId);
   return {};
 }
@@ -359,6 +402,20 @@ export async function unlinkDiligenceDocument(input: {
       }
     }
     await sb.from("dm_diligence_documents").delete().eq("id", input.documentId);
+  }
+
+  {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    await logDiligenceEvent(sb, {
+      dealId: input.dealId,
+      dealItemId: input.dealItemId,
+      actorUserId: user?.id ?? null,
+      eventType: "document_unlinked",
+      summary: "Document unlinked from the item",
+      detail: { documentId: input.documentId },
+    });
   }
 
   revalidate(input.dealId);
@@ -507,6 +564,20 @@ export async function recordDiligenceSignoff(input: {
   }
 
   await deriveStatusFromChain(sb, input.dealId, input.dealItemId, user.id);
+
+  await logDiligenceEvent(sb, {
+    dealId: input.dealId,
+    dealItemId: input.dealItemId,
+    actorUserId: user.id,
+    eventType: "signoff_recorded",
+    summary: `${input.role} ${input.decision}`,
+    detail: {
+      role: input.role,
+      decision: input.decision,
+      comment: input.comment?.trim() || null,
+    },
+  });
+
   revalidate(input.dealId);
   return {};
 }
@@ -517,6 +588,9 @@ export async function clearDiligenceSignoff(input: {
   role: SignoffRole;
 }): Promise<{ error?: string }> {
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   const sb = supabase as AnySb;
 
   // Clearing a role also clears everything downstream of it (a chain can't
@@ -533,6 +607,16 @@ export async function clearDiligenceSignoff(input: {
   // Derive the headline status back DOWN as well — undoing every decision
   // returns the item to not started (or in progress when documents exist).
   await deriveStatusFromChain(sb, input.dealId, input.dealItemId);
+
+  await logDiligenceEvent(sb, {
+    dealId: input.dealId,
+    dealItemId: input.dealItemId,
+    actorUserId: user?.id ?? null,
+    eventType: "signoff_cleared",
+    summary: `Sign-off undone (${rolesToClear.join(", ")})`,
+    detail: { rolesCleared: rolesToClear },
+  });
+
   revalidate(input.dealId);
   return {};
 }

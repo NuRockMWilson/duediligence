@@ -12,6 +12,7 @@
 import { revalidatePath } from "next/cache";
 import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/server";
+import { logDiligenceEvent } from "@/lib/diligence/audit";
 import {
   getTemplateDetail,
   type TemplateKind,
@@ -223,6 +224,20 @@ export async function commitChecklistImport(input: {
     return { error: iErr.message };
   }
 
+  {
+    const authed = await createClient();
+    const {
+      data: { user },
+    } = await authed.auth.getUser();
+    await logDiligenceEvent(supabase, {
+      dealId: null, // org-level event — no deal
+      actorUserId: user?.id ?? null,
+      eventType: "template_imported",
+      summary: `Imported checklist "${name}" (${items.length} items, ${input.source === "import_csv" ? "CSV" : "Excel"})`,
+      detail: { templateId, itemCount: items.length, source: input.source },
+    });
+  }
+
   revalidateTemplates();
   return { templateId, itemCount: items.length };
 }
@@ -300,6 +315,15 @@ export async function adoptTemplateForDeal(input: {
     { onConflict: "deal_id,template_id", ignoreDuplicates: true }
   );
   if (error) return { error: error.message };
+
+  await logDiligenceEvent(sb, {
+    dealId: input.dealId,
+    actorUserId: user?.id ?? null,
+    eventType: "packet_attached",
+    summary: "Packet attached to the deal",
+    detail: { templateId: input.templateId },
+  });
+
   revalidatePath(`/deals/${input.dealId}/diligence`);
   revalidatePath(`/deals/${input.dealId}/dashboard`);
   return {};
@@ -309,13 +333,26 @@ export async function unadoptTemplateForDeal(input: {
   dealId: string;
   templateId: string;
 }): Promise<{ error?: string }> {
-  const supabase = (await createClient()) as AnySb;
+  const authed = await createClient();
+  const {
+    data: { user },
+  } = await authed.auth.getUser();
+  const supabase = authed as AnySb;
   const { error } = await supabase
     .from("dm_diligence_deal_templates")
     .delete()
     .eq("deal_id", input.dealId)
     .eq("template_id", input.templateId);
   if (error) return { error: error.message };
+
+  await logDiligenceEvent(supabase, {
+    dealId: input.dealId,
+    actorUserId: user?.id ?? null,
+    eventType: "packet_removed",
+    summary: "Packet removed from the deal",
+    detail: { templateId: input.templateId },
+  });
+
   revalidatePath(`/deals/${input.dealId}/diligence`);
   revalidatePath(`/deals/${input.dealId}/dashboard`);
   return {};

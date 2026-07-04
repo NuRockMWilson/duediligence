@@ -187,12 +187,16 @@ function ToolsCluster({ dealId }: { dealId: string }) {
         onClick={() => router.refresh()}
         title="Refresh data from the server"
       />
-      <IconBtn
-        icon={<ScrollText className="w-3.5 h-3.5" />}
-        label="Audit"
-        title="Audit trail — coming soon"
-        disabled
-      />
+      {/* Item 6: the audit trail is live — status changes, sign-offs,
+          document links, imports, and packet events (migration 0098). */}
+      <Link
+        href={`/deals/${dealId}/audit`}
+        className="h-8 px-2.5 rounded bg-white/10 hover:bg-white/20 transition-colors flex items-center gap-1 text-[10px] uppercase tracking-wider font-display text-white"
+        title="Audit trail — every status change, sign-off, document link, import, and packet event"
+      >
+        <ScrollText className="w-3.5 h-3.5" />
+        <span className="hidden sm:inline">Audit</span>
+      </Link>
       {/* The ⚙ Settings link was removed here — Settings now lives in the
           account-menu dropdown (top-right). */}
     </div>
