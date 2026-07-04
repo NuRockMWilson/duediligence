@@ -64,9 +64,20 @@ export interface DiligenceItem {
   docs: DiligenceDoc[];
   signoffs: DiligenceSignoff[];
   /** Part 2 — document requirement mode for the approver gate: 'all' (every
-   *  linked document expected) or 'any' (one suffices, either/or items).
+   *  expected-document slot filled) or 'any' (one linked doc suffices).
    *  Defaults 'all'; read tolerantly so pre-migration-0099 deploys still work. */
   documentRequirement: "all" | "any";
+  /** Expected-document slots (migration 0100). Under 'all', every slot must
+   *  be filled by a linked document before the Approver can approve; items
+   *  with no slots fall back to ">=1 linked document". */
+  expectedDocs: ExpectedDoc[];
+}
+
+export interface ExpectedDoc {
+  id: string;
+  label: string;
+  /** The linked document filling this slot, if any. */
+  documentId: string | null;
 }
 
 export interface TeamMember {
@@ -304,6 +315,29 @@ export async function getDiligenceChecklist(
     }
   }
 
+  // Expected-document slots (migration 0100) — best-effort like above, so a
+  // deploy ahead of the migration degrades to "no slots" (>=1-doc gate).
+  const expectedByItem = new Map<string, ExpectedDoc[]>();
+  {
+    const { data: expRows, error: expErr } = await sb
+      .from("dm_diligence_expected_docs")
+      .select("id, deal_item_id, label, document_id, position")
+      .eq("deal_id", dealId)
+      .order("position", { ascending: true });
+    if (!expErr) {
+      for (const r of (expRows ?? []) as Array<{
+        id: string;
+        deal_item_id: string;
+        label: string;
+        document_id: string | null;
+      }>) {
+        const arr = expectedByItem.get(r.deal_item_id) ?? [];
+        arr.push({ id: r.id, label: r.label, documentId: r.document_id });
+        expectedByItem.set(r.deal_item_id, arr);
+      }
+    }
+  }
+
   // Group sign-offs by deal-item.
   type SignoffRow = {
     deal_item_id: string;
@@ -368,6 +402,7 @@ export async function getDiligenceChecklist(
         docs: docsByItem.get(r.id) ?? [],
         signoffs: signoffsByItem.get(r.id) ?? [],
         documentRequirement: reqByItem.get(r.id) ?? "all",
+        expectedDocs: expectedByItem.get(r.id) ?? [],
       };
     }
   );

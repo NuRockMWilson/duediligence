@@ -381,6 +381,19 @@ export async function unlinkDiligenceDocument(input: {
     .eq("document_id", input.documentId);
   if (error) return { error: error.message };
 
+  // A slot assignment is only valid while the document stays linked — clear
+  // any expected-doc slot on this item that pointed at it (best-effort; the
+  // table ships with migration 0100).
+  try {
+    await sb
+      .from("dm_diligence_expected_docs")
+      .update({ document_id: null })
+      .eq("deal_item_id", input.dealItemId)
+      .eq("document_id", input.documentId);
+  } catch {
+    /* pre-migration deploy */
+  }
+
   // If no item still links this document, delete the document + storage object.
   const { data: remaining } = await sb
     .from("dm_diligence_item_documents")
@@ -447,6 +460,102 @@ export async function setDiligenceDocumentRequirement(input: {
         : error.message,
     };
   }
+  revalidate(input.dealId);
+  return {};
+}
+
+// -----------------------------------------------------------------------------
+// Expected-document slots (migration 0100) — give require-all real semantics:
+// an item lists the documents it expects; each slot is filled by assigning one
+// of the item's linked documents.
+// -----------------------------------------------------------------------------
+const EXPECTED_DOCS_HINT =
+  "Expected-document slots need migration 0100_diligence_expected_docs.sql — run it in the Supabase SQL editor first.";
+
+function expectedDocsError(message: string): string {
+  return message.includes("dm_diligence_expected_docs")
+    ? EXPECTED_DOCS_HINT
+    : message;
+}
+
+export async function addDiligenceExpectedDoc(input: {
+  dealId: string;
+  dealItemId: string;
+  label: string;
+}): Promise<{ error?: string }> {
+  const label = input.label.trim();
+  if (!label) return { error: "Give the expected document a name." };
+  const supabase = await createClient();
+  const sb = supabase as AnySb;
+
+  const { data: existing } = await sb
+    .from("dm_diligence_expected_docs")
+    .select("position")
+    .eq("deal_item_id", input.dealItemId)
+    .order("position", { ascending: false })
+    .limit(1);
+  const nextPos =
+    ((existing as { position: number }[] | null)?.[0]?.position ?? -1) + 1;
+
+  const { error } = await sb.from("dm_diligence_expected_docs").insert({
+    deal_id: input.dealId,
+    deal_item_id: input.dealItemId,
+    label,
+    position: nextPos,
+  });
+  if (error) return { error: expectedDocsError(error.message) };
+  revalidate(input.dealId);
+  return {};
+}
+
+export async function removeDiligenceExpectedDoc(input: {
+  dealId: string;
+  expectedDocId: string;
+}): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const sb = supabase as AnySb;
+  const { error } = await sb
+    .from("dm_diligence_expected_docs")
+    .delete()
+    .eq("id", input.expectedDocId);
+  if (error) return { error: expectedDocsError(error.message) };
+  revalidate(input.dealId);
+  return {};
+}
+
+/** Fill (or clear, with documentId null) an expected-document slot with one of
+ *  the item's linked documents. */
+export async function assignDiligenceExpectedDoc(input: {
+  dealId: string;
+  dealItemId: string;
+  expectedDocId: string;
+  documentId: string | null;
+}): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const sb = supabase as AnySb;
+
+  if (input.documentId) {
+    // The assignment must reference a document actually linked to the item.
+    const { data: link } = await sb
+      .from("dm_diligence_item_documents")
+      .select("document_id")
+      .eq("deal_item_id", input.dealItemId)
+      .eq("document_id", input.documentId)
+      .maybeSingle();
+    if (!link) {
+      return {
+        error:
+          "That document isn't linked to this item — link it first, then assign it to the slot.",
+      };
+    }
+  }
+
+  const { error } = await sb
+    .from("dm_diligence_expected_docs")
+    .update({ document_id: input.documentId })
+    .eq("id", input.expectedDocId)
+    .eq("deal_item_id", input.dealItemId);
+  if (error) return { error: expectedDocsError(error.message) };
   revalidate(input.dealId);
   return {};
 }
@@ -568,21 +677,61 @@ export async function recordDiligenceSignoff(input: {
   }
 
   // Document gate (Part 2): the Approver cannot approve until the item's
-  // required linked documents are present. A link's existence IS presence, so
-  // both requirement modes ('all' / 'any') currently require at least one
-  // linked document; the mode is persisted per item for either/or semantics
-  // and future expected-document lists. Waived/na items never reach this path
-  // (they sit outside the chain).
+  // required documents are present.
+  //   'all'  — every expected-document slot must be filled by a linked doc
+  //            (items with no slots fall back to ">=1 linked document");
+  //   'any'  — any one linked document suffices (slots are advisory).
+  // Waived/na items never reach this path (they sit outside the chain).
   if (input.role === "approver" && input.decision === "approved") {
-    const { count: docCount } = await sb
-      .from("dm_diligence_item_documents")
-      .select("document_id", { count: "exact", head: true })
-      .eq("deal_item_id", input.dealItemId);
-    if ((docCount ?? 0) === 0) {
+    const [{ data: linkRows }, { data: itemRow }] = await Promise.all([
+      sb
+        .from("dm_diligence_item_documents")
+        .select("document_id")
+        .eq("deal_item_id", input.dealItemId),
+      sb
+        .from("dm_diligence_deal_items")
+        .select("document_requirement")
+        .eq("id", input.dealItemId)
+        .maybeSingle(),
+    ]);
+    const linkedIds = new Set(
+      ((linkRows ?? []) as { document_id: string }[]).map((r) => r.document_id)
+    );
+    if (linkedIds.size === 0) {
       return {
         error:
           "No documents are linked to this item — the Approver can't approve until the required documents are present. Upload or link a document first (or waive the item with a reason).",
       };
+    }
+
+    const mode =
+      (itemRow as { document_requirement?: string } | null)
+        ?.document_requirement === "any"
+        ? "any"
+        : "all";
+    if (mode === "all") {
+      // Best-effort: pre-migration-0100 deploys have no slots table, which
+      // degrades to the ">=1 linked document" gate above.
+      const { data: slots, error: slotsErr } = await sb
+        .from("dm_diligence_expected_docs")
+        .select("label, document_id")
+        .eq("deal_item_id", input.dealItemId);
+      if (!slotsErr && slots && (slots as unknown[]).length > 0) {
+        const unfilled = (
+          slots as { label: string; document_id: string | null }[]
+        ).filter((s) => !s.document_id || !linkedIds.has(s.document_id));
+        if (unfilled.length > 0) {
+          return {
+            error: `This item requires all expected documents, but ${
+              unfilled.length
+            } slot${unfilled.length === 1 ? " is" : "s are"} unfilled: ${unfilled
+              .map((s) => `“${s.label}”`)
+              .join(
+                ", "
+              )}. Assign a linked document to each (or switch the item to “any one suffices”).`,
+          };
+        }
+      }
     }
   }
 

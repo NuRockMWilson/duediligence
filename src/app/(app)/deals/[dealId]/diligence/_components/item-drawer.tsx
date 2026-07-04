@@ -23,7 +23,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge, FileIcon, type FileType } from "@/components/nurock-ui";
 import FileDropZone from "@/components/file-drop-zone";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { CheckCircle2, ExternalLink, Link2, Loader2, Trash2, Upload } from "lucide-react";
+import {
+  CheckCircle2,
+  Circle,
+  ExternalLink,
+  Link2,
+  Loader2,
+  Plus,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 import { categoryLabel } from "@/lib/diligence/categories";
 import { formatDate } from "@/lib/format";
 import type { DiligenceItem, TeamMember, LibraryDoc } from "@/lib/data/diligence";
@@ -36,6 +46,9 @@ import {
   setDiligenceNotes,
   setDiligenceStatus,
   setDiligenceDocumentRequirement,
+  addDiligenceExpectedDoc,
+  removeDiligenceExpectedDoc,
+  assignDiligenceExpectedDoc,
   linkDiligenceDocument,
   unlinkDiligenceDocument,
   uploadDiligenceDocument,
@@ -45,6 +58,7 @@ import {
 } from "../actions";
 
 const UNASSIGNED = "__unassigned__";
+const UNFILLED_SLOT = "__unfilled__";
 
 const SIGNOFF_ROLES: { role: SignoffRole; label: string }[] = [
   { role: "preparer", label: "Preparer" },
@@ -91,6 +105,8 @@ export function ItemDrawer({
   const [notes, setNotes] = React.useState("");
   // Part 2 — library-link picker selection.
   const [linkDocId, setLinkDocId] = React.useState("");
+  // Expected-document slot being added (migration 0100).
+  const [newSlotLabel, setNewSlotLabel] = React.useState("");
 
   // Seed local notes when a new item opens.
   const [seededFor, setSeededFor] = React.useState<string | null>(null);
@@ -99,6 +115,7 @@ export function ItemDrawer({
     setNotes(item.notes ?? "");
     setFile(null);
     setLinkDocId("");
+    setNewSlotLabel("");
   }
 
   // Library documents not already linked to this item.
@@ -403,7 +420,7 @@ export function ItemDrawer({
               {/* Requirement mode — read by the Approver gate. */}
               <div
                 className="flex items-center gap-1"
-                title="What the Approver gate expects before approval: every linked document ('All linked'), or any one of them ('Any one' — either/or items like EIN Letter / W-9)."
+                title="What the Approver gate expects before approval: every expected-document slot filled ('All expected' — items with no slots need at least one linked document), or any one linked document ('Any one' — either/or items like EIN Letter / W-9)."
               >
                 <span className="text-[10px] uppercase tracking-wider text-nurock-slate-light">
                   Require
@@ -433,7 +450,7 @@ export function ItemDrawer({
                         : "border-nurock-border text-nurock-slate hover:border-nurock-navy/40"
                     } disabled:opacity-50`}
                   >
-                    {mode === "all" ? "All linked" : "Any one"}
+                    {mode === "all" ? "All expected" : "Any one"}
                   </button>
                 ))}
               </div>
@@ -477,6 +494,124 @@ export function ItemDrawer({
                     )}
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Expected-document slots (migration 0100). Under "All expected"
+                the Approver gate requires every slot filled by a linked doc;
+                under "Any one" the slots are advisory. */}
+            {(item.expectedDocs.length > 0 || canEdit) && (
+              <div className="rounded border border-nurock-border bg-nurock-gray/20 p-2.5 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] uppercase tracking-wider text-nurock-slate-light">
+                    Expected documents
+                  </span>
+                  <span className="text-[10px] text-nurock-slate-light text-right">
+                    {item.documentRequirement === "all"
+                      ? item.expectedDocs.length > 0
+                        ? "Every slot must be filled before the Approver can approve"
+                        : "No slots yet — any one linked document gates approval"
+                      : "Advisory — any one linked document suffices"}
+                  </span>
+                </div>
+                {item.expectedDocs.map((slot) => {
+                  const filledDoc = slot.documentId
+                    ? item.docs.find((d) => d.id === slot.documentId)
+                    : undefined;
+                  return (
+                    <div key={slot.id} className="flex items-center gap-2">
+                      {filledDoc ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />
+                      ) : (
+                        <Circle className="w-3.5 h-3.5 text-nurock-slate-light shrink-0" />
+                      )}
+                      <span className="text-[12px] text-nurock-black flex-1 truncate">
+                        {slot.label}
+                      </span>
+                      <Select
+                        value={filledDoc ? slot.documentId! : UNFILLED_SLOT}
+                        onValueChange={(v) =>
+                          run(
+                            () =>
+                              assignDiligenceExpectedDoc({
+                                dealId,
+                                dealItemId: item!.id,
+                                expectedDocId: slot.id,
+                                documentId: v === UNFILLED_SLOT ? null : v,
+                              }),
+                            v === UNFILLED_SLOT ? "Slot cleared" : "Slot filled"
+                          )
+                        }
+                        disabled={!canEdit || pending}
+                      >
+                        <SelectTrigger className="h-7 text-[11px] w-[190px]">
+                          <SelectValue placeholder="Assign a linked doc…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={UNFILLED_SLOT}>
+                            — unfilled —
+                          </SelectItem>
+                          {item.docs.map((d) => (
+                            <SelectItem key={d.id} value={d.id}>
+                              {d.displayName ?? d.originalFilename}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {canEdit && (
+                        <button
+                          onClick={() =>
+                            run(
+                              () =>
+                                removeDiligenceExpectedDoc({
+                                  dealId,
+                                  expectedDocId: slot.id,
+                                }),
+                              "Slot removed"
+                            )
+                          }
+                          disabled={pending}
+                          className="p-1 text-nurock-slate-light hover:text-red-600 disabled:opacity-50"
+                          title="Remove this expected-document slot"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+                {canEdit && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={newSlotLabel}
+                      onChange={(e) => setNewSlotLabel(e.target.value)}
+                      placeholder="Add expected document (e.g. W-9)"
+                      className="h-8 flex-1 px-2 text-[12px] border rounded border-nurock-border bg-white"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8"
+                      disabled={!newSlotLabel.trim() || pending}
+                      onClick={() => {
+                        const label = newSlotLabel.trim();
+                        if (!label) return;
+                        setNewSlotLabel("");
+                        run(
+                          () =>
+                            addDiligenceExpectedDoc({
+                              dealId,
+                              dealItemId: item!.id,
+                              label,
+                            }),
+                          "Expected document added"
+                        );
+                      }}
+                    >
+                      <Plus className="w-3.5 h-3.5 mr-1" /> Add
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
 
