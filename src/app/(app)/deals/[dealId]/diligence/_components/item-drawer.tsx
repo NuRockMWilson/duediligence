@@ -362,7 +362,9 @@ export function ItemDrawer({
                       </div>
                       {d.byteSize != null && (
                         <div className="text-[10.5px] text-nurock-slate-light">
-                          {(d.byteSize / 1024).toFixed(0)} KB
+                          {d.byteSize < 1024
+                            ? "<1 KB"
+                            : `${(d.byteSize / 1024).toFixed(0)} KB`}
                         </div>
                       )}
                     </div>
