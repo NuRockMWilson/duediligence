@@ -144,12 +144,17 @@ export default function DealHeader({
               Schedule are Dev-module operational rollups with no data source
               in this app — permanently dash-valued chips were removed rather
               than fabricated. Full draw metrics live in the Development
-              module (one click via the module switcher). */}
+              module (one click via the module switcher).
+
+              Source: deals.model — the last PROMOTED UW baseline. Downstream
+              modules intentionally read the promoted snapshot, never the UW
+              app's working draft, so this can lag the UW model header until
+              pending changes are promoted through the pipeline. */}
           {totalDevCost > 0 && (
             <HudChip
               label="TDC"
               value={formatCurrencyTerse(totalDevCost)}
-              title={`Total Development Cost (from the UW model): ${formatCurrency(totalDevCost)}`}
+              title={`Total Development Cost from the last promoted UW baseline: ${formatCurrency(totalDevCost)}. The UW model's working draft may differ until its pending changes are promoted.`}
               tone="neutral"
             />
           )}
