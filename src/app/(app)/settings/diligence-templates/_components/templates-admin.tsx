@@ -344,7 +344,9 @@ function CreateDialog({
           </Button>
           <Button
             onClick={submit}
-            disabled={pending}
+            // Item 8: required fields gate the button — no submit-then-toast.
+            disabled={pending || !name.trim()}
+            title={!name.trim() ? "Enter a template name first" : undefined}
             className="bg-nurock-navy hover:bg-nurock-navy-dark text-white"
           >
             {pending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Create"}
@@ -451,6 +453,25 @@ function ImportDialog({
     label: h,
   }));
 
+  // Item 9: flag duplicate item titles in the parsed sheet (case-insensitive,
+  // keyed on the currently-mapped title column) BEFORE import.
+  const duplicateTitles = React.useMemo(() => {
+    if (!sheet) return [] as Array<{ title: string; count: number }>;
+    const col = Number(titleCol);
+    const counts = new Map<string, { title: string; count: number }>();
+    for (const r of sheet.rows) {
+      const raw = String(r[col] ?? "").trim();
+      if (!raw) continue;
+      const key = raw.toLowerCase();
+      const e = counts.get(key) ?? { title: raw, count: 0 };
+      e.count += 1;
+      counts.set(key, e);
+    }
+    return Array.from(counts.values())
+      .filter((e) => e.count > 1)
+      .sort((a, b) => b.count - a.count);
+  }, [sheet, titleCol]);
+
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="sm:max-w-[640px]">
@@ -530,6 +551,24 @@ function ImportDialog({
               <ColMap label="Code / reference" value={codeCol} onChange={setCodeCol} options={colOptions} />
             </div>
 
+            {/* Item 9: visible duplicate-title warning in the preview. */}
+            {duplicateTitles.length > 0 && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+                <span className="font-medium">
+                  {duplicateTitles.length} duplicate title
+                  {duplicateTitles.length === 1 ? "" : "s"} in this file:
+                </span>{" "}
+                {duplicateTitles
+                  .slice(0, 4)
+                  .map((d) => `“${d.title}” ×${d.count}`)
+                  .join(", ")}
+                {duplicateTitles.length > 4
+                  ? ` — and ${duplicateTitles.length - 4} more`
+                  : ""}
+                . Duplicates import as separate items — dedupe the source file
+                first if that isn&apos;t intended.
+              </div>
+            )}
             <div className="text-[11px] text-nurock-slate-light">
               {sheet.rows.length} rows detected. Preview of first 3:
             </div>
@@ -558,7 +597,9 @@ function ImportDialog({
             </Button>
             <Button
               onClick={commit}
-              disabled={pending}
+              // Item 8: required fields gate the button — no submit-then-toast.
+              disabled={pending || !name.trim()}
+              title={!name.trim() ? "Enter a template name first" : undefined}
               className="bg-nurock-navy hover:bg-nurock-navy-dark text-white"
             >
               {pending ? (
