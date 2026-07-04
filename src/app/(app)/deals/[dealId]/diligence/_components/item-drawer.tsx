@@ -268,22 +268,52 @@ export function ItemDrawer({
             <Label htmlFor="dd-due" className="text-xs font-medium">
               Due date
             </Label>
-            <input
-              id="dd-due"
-              type="date"
-              defaultValue={item.dueDate ?? ""}
-              disabled={!canEdit || pending}
-              onChange={(e) =>
-                run(() =>
-                  setDiligenceDueDate({
-                    dealId,
-                    dealItemId: item.id,
-                    dueDate: e.target.value || null,
-                  })
-                )
-              }
-              className="w-full h-9 px-2 text-sm border rounded border-nurock-border"
-            />
+            <div className="flex items-center gap-2">
+              <input
+                id="dd-due"
+                type="date"
+                // Re-key on the persisted value so the uncontrolled input
+                // re-syncs after a server refresh — otherwise a stale
+                // defaultValue lingers after saves/clears.
+                key={`due-${item.id}-${item.dueDate ?? "none"}`}
+                defaultValue={item.dueDate ?? ""}
+                disabled={!canEdit || pending}
+                onChange={(e) =>
+                  run(() =>
+                    setDiligenceDueDate({
+                      dealId,
+                      dealItemId: item.id,
+                      dueDate: e.target.value || null,
+                    })
+                  )
+                }
+                className="w-full h-9 px-2 text-sm border rounded border-nurock-border"
+              />
+              {/* Explicit clear — the date input's own clear affordance is
+                  browser-dependent and its change event proved unreliable for
+                  emptying; this button guarantees a persisted removal. */}
+              {canEdit && item.dueDate && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    run(
+                      () =>
+                        setDiligenceDueDate({
+                          dealId,
+                          dealItemId: item.id,
+                          dueDate: null,
+                        }),
+                      "Due date removed"
+                    )
+                  }
+                  disabled={pending}
+                  className="shrink-0 h-9 px-2.5 text-[12px] rounded border border-nurock-border text-nurock-slate hover:text-red-700 hover:border-red-300 disabled:opacity-50"
+                  title="Remove the due date"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Notes */}
