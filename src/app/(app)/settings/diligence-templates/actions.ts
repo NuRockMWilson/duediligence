@@ -77,8 +77,9 @@ export async function createDiligenceTemplate(input: {
   return { id: (data as { id: string }).id };
 }
 
-export async function deactivateDiligenceTemplate(input: {
+export async function setDiligenceTemplateActive(input: {
   templateId: string;
+  active: boolean;
 }): Promise<{ error?: string }> {
   const supabase = (await createClient()) as AnySb;
   // Guard: never retire the canonical template.
@@ -87,14 +88,23 @@ export async function deactivateDiligenceTemplate(input: {
     .select("is_canonical")
     .eq("id", input.templateId)
     .maybeSingle();
-  if ((t as { is_canonical: boolean } | null)?.is_canonical) {
+  if (!input.active && (t as { is_canonical: boolean } | null)?.is_canonical) {
     return { error: "The canonical template can't be retired." };
   }
-  const { error } = await supabase
+  // .select() so a zero-row update (e.g. RLS silently filtering the row)
+  // fails loudly instead of toasting success without persisting.
+  const { data: updated, error } = await supabase
     .from("nurock_diligence_templates")
-    .update({ is_active: false, updated_at: new Date().toISOString() })
-    .eq("id", input.templateId);
+    .update({ is_active: input.active, updated_at: new Date().toISOString() })
+    .eq("id", input.templateId)
+    .select("id");
   if (error) return { error: error.message };
+  if (!updated || (updated as unknown[]).length === 0) {
+    return {
+      error:
+        "The change didn't persist — no row was updated. Check row-level security on nurock_diligence_templates.",
+    };
+  }
   revalidateTemplates();
   return {};
 }

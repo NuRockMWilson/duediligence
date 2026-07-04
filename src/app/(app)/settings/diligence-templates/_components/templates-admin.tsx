@@ -21,6 +21,7 @@ import {
   X,
   Loader2,
   Link2,
+  RotateCcw,
 } from "lucide-react";
 import { Card, Badge } from "@/components/nurock-ui";
 import { Button } from "@/components/ui/button";
@@ -60,7 +61,7 @@ import type {
 } from "@/lib/data/diligence-templates";
 import {
   createDiligenceTemplate,
-  deactivateDiligenceTemplate,
+  setDiligenceTemplateActive,
   previewChecklistImport,
   commitChecklistImport,
   loadTemplateDetail,
@@ -109,13 +110,27 @@ export function TemplatesAdmin({
   function confirmRetire() {
     const t = templateToRetire;
     if (!t) return;
-    deactivateDiligenceTemplate({ templateId: t.id }).then((res) => {
-      if (res.error) toast.error(res.error);
-      else {
-        toast.success("Template retired");
-        router.refresh();
+    setDiligenceTemplateActive({ templateId: t.id, active: false }).then(
+      (res) => {
+        if (res.error) toast.error(res.error);
+        else {
+          toast.success("Template retired");
+          router.refresh();
+        }
       }
-    });
+    );
+  }
+
+  function reactivate(t: TemplateSummary) {
+    setDiligenceTemplateActive({ templateId: t.id, active: true }).then(
+      (res) => {
+        if (res.error) toast.error(res.error);
+        else {
+          toast.success("Template reactivated");
+          router.refresh();
+        }
+      }
+    );
   }
 
   return (
@@ -187,7 +202,9 @@ export function TemplatesAdmin({
             {templates.map((t) => (
               <tr
                 key={t.id}
-                className="border-b border-nurock-border/60 last:border-0 hover:bg-nurock-gray/20 cursor-pointer"
+                className={`border-b border-nurock-border/60 last:border-0 hover:bg-nurock-gray/20 cursor-pointer ${
+                  t.isActive ? "" : "opacity-55"
+                }`}
                 onClick={() => setDetailId(t.id)}
               >
                 <td className="px-5 py-2.5 text-nurock-black font-medium">
@@ -195,6 +212,11 @@ export function TemplatesAdmin({
                   {t.isCanonical && (
                     <span className="ml-2 text-[10px] text-nurock-slate-light">
                       (standard)
+                    </span>
+                  )}
+                  {!t.isActive && (
+                    <span className="ml-2 align-middle inline-flex">
+                      <Badge tone="red">Retired</Badge>
                     </span>
                   )}
                 </td>
@@ -211,15 +233,24 @@ export function TemplatesAdmin({
                   className="px-5 py-2.5 text-right"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {!t.isCanonical && (
-                    <button
-                      onClick={() => retire(t)}
-                      className="p-1 text-red-700 hover:bg-red-50 rounded"
-                      title="Retire template"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
+                  {!t.isCanonical &&
+                    (t.isActive ? (
+                      <button
+                        onClick={() => retire(t)}
+                        className="p-1 text-red-700 hover:bg-red-50 rounded"
+                        title="Retire template — hides it from deal adoption"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => reactivate(t)}
+                        className="p-1 text-nurock-navy hover:bg-nurock-navy/5 rounded"
+                        title="Reactivate template — makes it adoptable again"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      </button>
+                    ))}
                 </td>
               </tr>
             ))}
