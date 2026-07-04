@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge, FileIcon, type FileType } from "@/components/nurock-ui";
 import FileDropZone from "@/components/file-drop-zone";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CheckCircle2, ExternalLink, Loader2, Trash2, Upload } from "lucide-react";
 import { categoryLabel } from "@/lib/diligence/categories";
 import { formatDate } from "@/lib/format";
@@ -178,8 +179,16 @@ export function ItemDrawer({
     window.open(res.signedUrl, "_blank", "noopener");
   }
 
+  // Item 7: unlink confirms via the app's standard modal, not confirm().
+  const [docToRemove, setDocToRemove] = React.useState<string | null>(null);
+
   function onRemoveDoc(documentId: string) {
-    if (!confirm("Remove this document from the item?")) return;
+    setDocToRemove(documentId);
+  }
+
+  function confirmRemoveDoc() {
+    const documentId = docToRemove;
+    if (!documentId) return;
     run(
       () => unlinkDiligenceDocument({ dealId, dealItemId: item!.id, documentId }),
       "Document removed"
@@ -545,8 +554,9 @@ export function ItemDrawer({
               })}
             </div>
             <p className="text-[10.5px] text-nurock-slate-light">
-              The approver&apos;s decision sets the item&apos;s status. Preparer
-              &amp; reviewer steps are advisory.
+              The chain runs Preparer → Reviewer → Approver in order; the
+              approver&apos;s decision sets the item&apos;s status, and undoing
+              a step also undoes everything after it.
             </p>
           </div>
 
@@ -556,6 +566,20 @@ export function ItemDrawer({
             </p>
           )}
         </div>
+
+        {/* Item 7: document unlink — standard app modal instead of confirm(). */}
+        <ConfirmDialog
+          open={docToRemove !== null}
+          onOpenChange={(o) => {
+            if (!o) setDocToRemove(null);
+          }}
+          title="Remove document?"
+          description="Unlink this document from the item. The file itself stays in the deal's document library if other items reference it."
+          confirmLabel="Remove"
+          destructive
+          pending={pending}
+          onConfirm={confirmRemoveDoc}
+        />
       </SheetContent>
     </Sheet>
   );

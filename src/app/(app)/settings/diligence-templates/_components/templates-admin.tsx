@@ -51,6 +51,7 @@ import {
 import FileDropZone from "@/components/file-drop-zone";
 import { suggestCanonicalMatches } from "@/lib/diligence/fuzzy";
 import { categoryLabel } from "@/lib/diligence/categories";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import type {
   TemplateSummary,
   CanonicalItemLite,
@@ -97,10 +98,17 @@ export function TemplatesAdmin({
   const [createOpen, setCreateOpen] = React.useState(false);
   const [importOpen, setImportOpen] = React.useState(false);
   const [detailId, setDetailId] = React.useState<string | null>(null);
+  // Item 7: retire confirms via the app's standard modal, not confirm().
+  const [templateToRetire, setTemplateToRetire] =
+    React.useState<TemplateSummary | null>(null);
 
   function retire(t: TemplateSummary) {
-    if (!confirm(`Retire "${t.name}"? It will no longer be adoptable by deals.`))
-      return;
+    setTemplateToRetire(t);
+  }
+
+  function confirmRetire() {
+    const t = templateToRetire;
+    if (!t) return;
     deactivateDiligenceTemplate({ templateId: t.id }).then((res) => {
       if (res.error) toast.error(res.error);
       else {
@@ -112,6 +120,21 @@ export function TemplatesAdmin({
 
   return (
     <>
+      <ConfirmDialog
+        open={templateToRetire !== null}
+        onOpenChange={(o) => {
+          if (!o) setTemplateToRetire(null);
+        }}
+        title="Retire template?"
+        description={
+          templateToRetire
+            ? `Retire "${templateToRetire.name}"? It will no longer be adoptable by deals; deals that already adopted it are unaffected.`
+            : undefined
+        }
+        confirmLabel="Retire"
+        destructive
+        onConfirm={confirmRetire}
+      />
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="bg-nurock-navy/5 rounded-md p-2 border border-nurock-navy/10">

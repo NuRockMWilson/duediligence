@@ -12,6 +12,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
   ClipboardList,
   Download,
@@ -127,7 +128,7 @@ export function DiligenceShell({
   const [exportOpen, setExportOpen] = React.useState(false);
   const [includeDocs, setIncludeDocs] = React.useState(true);
   const [exporting, setExporting] = React.useState(false);
-  const [, startTransition] = React.useTransition();
+  const [pending, startTransition] = React.useTransition();
 
   const todayIso = React.useMemo(
     () => new Date().toISOString().slice(0, 10),
@@ -326,10 +327,25 @@ export function DiligenceShell({
     });
   }
 
+  // Item 7: packet removal confirms via the app's standard modal (see
+  // <ConfirmDialog> at the bottom of the tree), not a native confirm().
+  const [packetToRemove, setPacketToRemove] = React.useState<{
+    templateId: string;
+    name: string;
+  } | null>(null);
+
   function removePacket(templateId: string, name: string) {
-    if (!confirm(`Remove the "${name}" packet from this deal?`)) return;
+    setPacketToRemove({ templateId, name });
+  }
+
+  function confirmRemovePacket() {
+    const target = packetToRemove;
+    if (!target) return;
     startTransition(async () => {
-      const res = await unadoptTemplateForDeal({ dealId, templateId });
+      const res = await unadoptTemplateForDeal({
+        dealId,
+        templateId: target.templateId,
+      });
       if (res.error) {
         toast.error(res.error);
         return;
@@ -891,6 +907,24 @@ export function DiligenceShell({
         canApprove={canApprove}
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
+      />
+
+      {/* Item 7: packet removal — standard app modal instead of confirm(). */}
+      <ConfirmDialog
+        open={packetToRemove !== null}
+        onOpenChange={(o) => {
+          if (!o) setPacketToRemove(null);
+        }}
+        title="Remove packet?"
+        description={
+          packetToRemove
+            ? `Remove the "${packetToRemove.name}" packet from this deal? Its crosswalk coverage disappears from this page; the template itself stays available in Settings.`
+            : undefined
+        }
+        confirmLabel="Remove packet"
+        destructive
+        pending={pending}
+        onConfirm={confirmRemovePacket}
       />
 
       <Dialog open={exportOpen} onOpenChange={setExportOpen}>
