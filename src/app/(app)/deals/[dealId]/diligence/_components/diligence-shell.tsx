@@ -524,13 +524,22 @@ export function DiligenceShell({
               : d.daysRemaining === 0
                 ? "today"
                 : `in ${d.daysRemaining}d`;
+            // Item 1: show each milestone's OWN date inline. Several LIHTC
+            // milestones legitimately share a date (construction starts at
+            // closing; PIS at CO), so countdown-only chips read as a collapse
+            // bug — the visible date makes identical countdowns self-evident.
+            const short = (() => {
+              const m = d.date.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+              return m ? `${Number(m[2])}/${Number(m[3])}/${m[1].slice(2)}` : d.date;
+            })();
             return (
               <span
                 key={d.key}
                 className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${cls}`}
-                title={formatDate(d.date)}
+                title={`${d.label}: ${formatDate(d.date)} — from the UW model's key dates (keyDates.${d.key}). Milestones sharing a date share a countdown by definition.`}
               >
                 {d.label}
+                <span className="opacity-70 tabular-nums">{short}</span>
                 <span className="font-semibold">{rel}</span>
               </span>
             );
