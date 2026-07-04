@@ -24,7 +24,7 @@ import {
   RefreshCw,
   ScrollText,
 } from "lucide-react";
-import { formatCurrency, formatCurrencyTerse, formatPercent } from "@/lib/format";
+import { formatCurrency, formatCurrencyTerse } from "@/lib/format";
 import { ModuleSwitcher } from "./module-switcher";
 import { DealSwitcher, type DealOption } from "./deal-switcher";
 import AccountMenu from "@/components/account-menu";
@@ -34,10 +34,10 @@ interface DealHeaderProps {
   dealId: string;
   dealName: string;
   dealStage?: string | null;
+  /** UW construction-budget total. 0/absent hides the chip (item 5 — never
+   *  render a fabricated figure). Drawn/Variance/Schedule props were removed:
+   *  those are Dev-module rollups with no data source in this app. */
   totalDevCost: number;
-  drawnAmount?: number | null;
-  variance?: number | null;
-  scheduleDeltaDays?: number | null;
   userEmail: string;
   /** Display name for the account menu (falls back to email). */
   userDisplayName?: string | null;
@@ -60,9 +60,6 @@ export default function DealHeader({
   dealName,
   dealStage,
   totalDevCost,
-  drawnAmount = null,
-  variance = null,
-  scheduleDeltaDays = null,
   userEmail,
   userDisplayName = null,
   isOrgAdmin = false,
@@ -70,10 +67,6 @@ export default function DealHeader({
   savedAt,
   notificationsBell,
 }: DealHeaderProps) {
-  const drawnPct =
-    drawnAmount != null && totalDevCost > 0 ? drawnAmount / totalDevCost : null;
-  const variancePct =
-    variance != null && totalDevCost > 0 ? variance / totalDevCost : null;
 
   return (
     <header className="bg-nurock-navy text-white shadow-lg sticky top-0 z-50">
@@ -146,64 +139,20 @@ export default function DealHeader({
             to match the underwriting model; row 2 now carries vitals + tools. */}
         <div className="flex items-center gap-3 min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
-          <HudChip
-            label="TDC"
-            value={formatCurrencyTerse(totalDevCost)}
-            title={`Total Development Cost: ${formatCurrency(totalDevCost)}`}
-            tone="neutral"
-          />
-          <HudChip
-            label="Drawn"
-            value={drawnAmount == null ? "—" : formatCurrencyTerse(drawnAmount)}
-            sub={drawnPct == null ? undefined : formatPercent(drawnPct)}
-            title={
-              drawnAmount == null
-                ? "No draws funded yet"
-                : `Drawn to date: ${formatCurrency(drawnAmount)}${
-                    drawnPct != null ? ` (${formatPercent(drawnPct)} of TDC)` : ""
-                  }`
-            }
-            tone="emerald"
-          />
-          <HudChip
-            label="Variance"
-            value={
-              variance == null
-                ? "—"
-                : (variance >= 0 ? "+" : "") + formatCurrencyTerse(variance)
-            }
-            sub={
-              variancePct == null
-                ? undefined
-                : (variancePct >= 0 ? "+" : "") + formatPercent(variancePct)
-            }
-            title={
-              variance == null
-                ? "Variance not yet computed"
-                : `Variance vs UW baseline: ${
-                    variance >= 0 ? "+" : ""
-                  }${formatCurrency(variance)}`
-            }
-            tone="amber"
-          />
-          <HudChip
-            label="Schedule"
-            value={
-              scheduleDeltaDays == null
-                ? "—"
-                : (scheduleDeltaDays >= 0 ? "+" : "") +
-                  scheduleDeltaDays +
-                  "d"
-            }
-            title={
-              scheduleDeltaDays == null
-                ? "Schedule delta not yet computed"
-                : `${
-                    scheduleDeltaDays >= 0 ? "Behind by " : "Ahead by "
-                  }${Math.abs(scheduleDeltaDays)} days`
-            }
-            tone="neutral"
-          />
+          {/* Item 5: only the TDC chip remains, wired to the deal's REAL UW
+              construction-budget total (was hardcoded $0). Drawn / Variance /
+              Schedule are Dev-module operational rollups with no data source
+              in this app — permanently dash-valued chips were removed rather
+              than fabricated. Full draw metrics live in the Development
+              module (one click via the module switcher). */}
+          {totalDevCost > 0 && (
+            <HudChip
+              label="TDC"
+              value={formatCurrencyTerse(totalDevCost)}
+              title={`Total Development Cost (from the UW model): ${formatCurrency(totalDevCost)}`}
+              tone="neutral"
+            />
+          )}
           </div>
         </div>
 

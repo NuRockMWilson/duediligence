@@ -23,7 +23,14 @@ export default async function DealLayout({
   const access = await getCurrentUserAccess();
 
   const [{ data: deal, error }, { data: allDeals }] = await Promise.all([
-    supabase.from("deals").select("id, name, stage").eq("id", dealId).single(),
+    // Item 5: pull the UW construction budget (JSON sub-path — not the whole
+    // model) so the header's TDC chip shows the deal's REAL total development
+    // cost instead of a fabricated $0.
+    supabase
+      .from("deals")
+      .select("id, name, stage, constructionBudget:model->constructionBudget")
+      .eq("id", dealId)
+      .single(),
     // Full deal list for the in-header switcher dropdown — sorted by most
     // recently updated so the active project + likely-next-target sit at the
     // top. Limit 50 to keep the popover navigable. `stage` powers the
@@ -37,8 +44,13 @@ export default async function DealLayout({
 
   if (error || !deal) notFound();
 
-  // Diligence app: no draw-budget chip in the header.
-  const totalDevCost = 0;
+  // TDC = sum of the UW model's construction-budget lines — the same source
+  // of truth the Underwriting model and Dev-module dashboard report.
+  const cbLines = (deal as { constructionBudget?: Array<{ amount?: number }> })
+    .constructionBudget;
+  const totalDevCost = Array.isArray(cbLines)
+    ? cbLines.reduce((s, l) => s + (Number(l?.amount) || 0), 0)
+    : 0;
 
   return (
     <div className="min-h-screen bg-[#F7F8FA]">
