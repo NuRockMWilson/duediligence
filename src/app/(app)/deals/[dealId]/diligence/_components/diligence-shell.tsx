@@ -23,6 +23,7 @@ import {
   FileDown,
   Clock,
   Loader2,
+  Info,
 } from "lucide-react";
 import { Card, KpiTile, Badge, CircularProgress } from "@/components/nurock-ui";
 import { Button } from "@/components/ui/button";
@@ -434,14 +435,27 @@ export function DiligenceShell({
               }
             />
             <div>
-              <div className="font-display text-sm uppercase tracking-wider text-nurock-slate">
+              <div
+                className="font-display text-sm uppercase tracking-wider text-nurock-slate inline-flex items-center gap-1.5"
+                // Item 2: deal STAGE (header badge, e.g. "Committed") and this
+                // readiness % are intentionally independent measures — stage is
+                // the platform-wide deal lifecycle set on the underwriting /
+                // development side; readiness tracks only this checklist's
+                // sign-offs. A Committed deal can legitimately sit at 0% ready
+                // (diligence often begins in earnest at commitment).
+                title="Diligence readiness measures THIS checklist's approvals only. The deal's stage badge (top bar) is the platform lifecycle set in Underwriting/Development — the two are intentionally independent: a Committed deal can be 0% ready while diligence is just starting."
+              >
                 Readiness
+                <Info className="w-3 h-3 text-nurock-slate-light" />
               </div>
               <div className="text-[13px] text-nurock-slate-light mt-0.5 max-w-[220px] leading-snug">
                 {rollup.approved} of {rollup.applicable} required items approved
                 {rollup.waivedCount + rollup.naCount > 0
                   ? ` · ${rollup.waivedCount + rollup.naCount} waived/N-A`
                   : ""}
+              </div>
+              <div className="text-[11px] text-nurock-slate-light mt-1 max-w-[220px] leading-snug">
+                Independent of the deal&apos;s lifecycle stage
               </div>
             </div>
           </div>
