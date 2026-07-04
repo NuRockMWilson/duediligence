@@ -209,14 +209,28 @@ export function ItemDrawer({
         </SheetHeader>
 
         <div className="px-4 pb-6 space-y-5">
-          {/* Quick approve */}
+          {/* Quick approve — routes through the APPROVER sign-off (item 3:
+              status is never set to approved directly), so the server's
+              sequencing gate applies: Preparer and Reviewer must have signed
+              off first, else this errors with the reason. */}
           {canApprove && item.status === "submitted" && (
             <Button
-              onClick={() => onStatusChange("approved")}
+              onClick={() =>
+                run(
+                  () =>
+                    recordDiligenceSignoff({
+                      dealId,
+                      dealItemId: item!.id,
+                      role: "approver",
+                      decision: "approved",
+                    }),
+                  "Approved"
+                )
+              }
               disabled={pending}
               className="w-full bg-emerald-600 hover:bg-emerald-700 text-white"
             >
-              <CheckCircle2 className="w-4 h-4 mr-2" /> Approve item
+              <CheckCircle2 className="w-4 h-4 mr-2" /> Approve (as Approver)
             </Button>
           )}
 
@@ -234,8 +248,17 @@ export function ItemDrawer({
                 </SelectTrigger>
                 <SelectContent>
                   {DILIGENCE_STATUSES.map((s) => (
-                    <SelectItem key={s} value={s}>
+                    <SelectItem
+                      key={s}
+                      value={s}
+                      // Item 3: Approved can't be picked directly — it is
+                      // granted by the Approver's sign-off below (still
+                      // renders here so an approved item's current status
+                      // displays correctly).
+                      disabled={s === "approved"}
+                    >
                       {STATUS_META[s].label}
+                      {s === "approved" ? " (via sign-off)" : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>

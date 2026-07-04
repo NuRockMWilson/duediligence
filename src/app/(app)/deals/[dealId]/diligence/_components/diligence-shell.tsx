@@ -236,19 +236,24 @@ export function DiligenceShell({
 
   function bulkStatus(next: DiligenceStatus) {
     if (selectedIds.length === 0) return;
-    let reason: string | null = null;
-    if (WAIVE_STATES.includes(next)) {
-      reason = window.prompt(
-        `Reason for marking ${selectedIds.length} item(s) ${STATUS_META[next].label}:`
+    // Item 3: bulk writes are limited to non-terminal statuses. Approved is
+    // granted only by the Approver's sign-off; Waived / N/A are per-item
+    // decisions with a reason (open the item). The menu below only offers
+    // non-terminal options; this guard backstops it (the server enforces too).
+    if (next === "approved" || WAIVE_STATES.includes(next)) {
+      toast.error(
+        next === "approved"
+          ? "Approved is granted via each item's sign-off chain."
+          : "Waived / N/A are per-item decisions — open each item to record the reason."
       );
-      if (!reason?.trim()) return;
+      return;
     }
     startTransition(async () => {
       const res = await setDiligenceStatus({
         dealId,
         dealItemIds: selectedIds,
         status: next,
-        waivedReason: reason?.trim() ?? null,
+        waivedReason: null,
       });
       if (res.error) {
         toast.error(res.error);
@@ -699,7 +704,9 @@ export function DiligenceShell({
           </span>
           <BulkSelect
             placeholder="Set status…"
-            options={DILIGENCE_STATUSES.map((s) => ({
+            options={DILIGENCE_STATUSES.filter(
+              (s) => s !== "approved" && !WAIVE_STATES.includes(s)
+            ).map((s) => ({
               value: s,
               label: STATUS_META[s].label,
             }))}

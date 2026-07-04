@@ -48,6 +48,13 @@ const WAIVE_STATES: DiligenceStatus[] = ["waived", "na"];
 // -----------------------------------------------------------------------------
 // Status
 // -----------------------------------------------------------------------------
+// Item 3 integrity rules:
+//  - "approved" is NEVER set directly — it is granted exclusively by the
+//    Approver's sign-off (recordDiligenceSignoff), so the headline status and
+//    the chain can't desync.
+//  - Waived / N/A are individual decisions (they carry a reason and skip the
+//    chain deliberately) — bulk writes are limited to the non-terminal
+//    statuses (not started / in progress / submitted).
 export async function setDiligenceStatus(input: {
   dealId: string;
   dealItemIds: string[]; // one or many (bulk)
@@ -55,22 +62,33 @@ export async function setDiligenceStatus(input: {
   waivedReason?: string | null;
 }): Promise<{ error?: string }> {
   if (input.dealItemIds.length === 0) return {};
-  if (WAIVE_STATES.includes(input.status) && !input.waivedReason?.trim()) {
-    return { error: "A reason is required to mark an item waived or N/A." };
+  if (input.status === "approved") {
+    return {
+      error:
+        "Approved is granted by the Approver's sign-off — open the item and complete the sign-off chain.",
+    };
+  }
+  if (WAIVE_STATES.includes(input.status)) {
+    if (input.dealItemIds.length > 1) {
+      return {
+        error:
+          "Waived / N/A are per-item decisions — open each item to record it with its reason.",
+      };
+    }
+    if (!input.waivedReason?.trim()) {
+      return { error: "A reason is required to mark an item waived or N/A." };
+    }
   }
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
   const sb = supabase as AnySb;
 
   const patch: Record<string, unknown> = {
     status: input.status,
     updated_at: new Date().toISOString(),
-    // Maintain the consistency CHECKs in one write:
-    approved_at: input.status === "approved" ? new Date().toISOString() : null,
-    approved_by: input.status === "approved" ? user?.id ?? null : null,
+    // Non-approved writes always clear the approval stamp (consistency CHECK).
+    approved_at: null,
+    approved_by: null,
     waived_reason: WAIVE_STATES.includes(input.status)
       ? input.waivedReason!.trim()
       : null,
@@ -363,8 +381,69 @@ export async function getDiligenceDocSignedUrl(input: {
 }
 
 // -----------------------------------------------------------------------------
-// Multi-approver sign-off (Increment 3)
+// Multi-approver sign-off (Increment 3; item-3 integrity hardening)
 // -----------------------------------------------------------------------------
+// Chain order is Preparer → Reviewer → Approver:
+//  - a role can only act once every UPSTREAM role has an "approved" decision;
+//  - deciding (or re-deciding) an upstream role invalidates all DOWNSTREAM
+//    decisions (they are deleted and must be redone);
+//  - the item's headline status is DERIVED from the chain after every change,
+//    in both directions (approve → approved; undo-all → back to not started /
+//    in progress).
+
+const SIGNOFF_ORDER: SignoffRole[] = ["preparer", "reviewer", "approver"];
+
+type SignoffRow = { role: SignoffRole; decision: "approved" | "rejected" };
+
+/** Re-derive the item's headline status from its chain + linked documents.
+ *  Never touches waived / na items (those deliberately sit outside the chain). */
+async function deriveStatusFromChain(
+  sb: AnySb,
+  dealId: string,
+  dealItemId: string,
+  approverUserId?: string | null
+): Promise<void> {
+  const [{ data: signoffs }, { data: itemRow }, { count: docCount }] =
+    await Promise.all([
+      sb
+        .from("dm_diligence_signoffs")
+        .select("role, decision")
+        .eq("deal_item_id", dealItemId),
+      sb
+        .from("dm_diligence_deal_items")
+        .select("status")
+        .eq("id", dealItemId)
+        .maybeSingle(),
+      sb
+        .from("dm_diligence_item_documents")
+        .select("document_id", { count: "exact", head: true })
+        .eq("deal_item_id", dealItemId),
+    ]);
+  const current = (itemRow as { status?: string } | null)?.status ?? null;
+  if (current === "waived" || current === "na") return;
+
+  const rows = (signoffs ?? []) as SignoffRow[];
+  const byRole = new Map(rows.map((r) => [r.role, r.decision]));
+
+  let next: DiligenceStatus;
+  if (byRole.get("approver") === "approved") next = "approved";
+  else if (rows.some((r) => r.decision === "rejected")) next = "in_progress";
+  else if (rows.length > 0) next = "submitted";
+  else next = (docCount ?? 0) > 0 ? "in_progress" : "not_started";
+
+  const patch: Record<string, unknown> = {
+    status: next,
+    updated_at: new Date().toISOString(),
+    approved_at: next === "approved" ? new Date().toISOString() : null,
+    approved_by: next === "approved" ? approverUserId ?? null : null,
+  };
+  await sb
+    .from("dm_diligence_deal_items")
+    .update(patch)
+    .eq("id", dealItemId)
+    .eq("deal_id", dealId);
+}
+
 export async function recordDiligenceSignoff(input: {
   dealId: string;
   dealItemId: string;
@@ -378,6 +457,29 @@ export async function recordDiligenceSignoff(input: {
   } = await supabase.auth.getUser();
   if (!user) return { error: "Not signed in." };
   const sb = supabase as AnySb;
+
+  // Sequencing gate — every upstream role must already be "approved".
+  const roleIdx = SIGNOFF_ORDER.indexOf(input.role);
+  if (roleIdx > 0) {
+    const { data: existing } = await sb
+      .from("dm_diligence_signoffs")
+      .select("role, decision")
+      .eq("deal_item_id", input.dealItemId);
+    const byRole = new Map(
+      ((existing ?? []) as SignoffRow[]).map((r) => [r.role, r.decision])
+    );
+    for (const upstream of SIGNOFF_ORDER.slice(0, roleIdx)) {
+      if (byRole.get(upstream) !== "approved") {
+        const label = upstream.charAt(0).toUpperCase() + upstream.slice(1);
+        return {
+          error:
+            byRole.get(upstream) === "rejected"
+              ? `The ${label} rejected this item — it must be re-prepared and re-approved upstream before the ${input.role} can act.`
+              : `The ${label} hasn't signed off yet — the chain runs Preparer → Reviewer → Approver.`,
+        };
+      }
+    }
+  }
 
   const { error } = await sb.from("dm_diligence_signoffs").upsert(
     {
@@ -393,30 +495,18 @@ export async function recordDiligenceSignoff(input: {
   );
   if (error) return { error: error.message };
 
-  // The approver's decision drives the item's headline status (deal-items stay
-  // the single source of truth for coverage).
-  if (input.role === "approver") {
-    const patch =
-      input.decision === "approved"
-        ? {
-            status: "approved",
-            approved_at: new Date().toISOString(),
-            approved_by: user.id,
-            updated_at: new Date().toISOString(),
-          }
-        : {
-            status: "in_progress",
-            approved_at: null,
-            approved_by: null,
-            updated_at: new Date().toISOString(),
-          };
+  // An upstream (re-)decision invalidates everything downstream — those roles
+  // must re-review the changed state.
+  const downstream = SIGNOFF_ORDER.slice(roleIdx + 1);
+  if (downstream.length > 0) {
     await sb
-      .from("dm_diligence_deal_items")
-      .update(patch)
-      .eq("id", input.dealItemId)
-      .eq("deal_id", input.dealId);
+      .from("dm_diligence_signoffs")
+      .delete()
+      .eq("deal_item_id", input.dealItemId)
+      .in("role", downstream);
   }
 
+  await deriveStatusFromChain(sb, input.dealId, input.dealItemId, user.id);
   revalidate(input.dealId);
   return {};
 }
@@ -428,12 +518,21 @@ export async function clearDiligenceSignoff(input: {
 }): Promise<{ error?: string }> {
   const supabase = await createClient();
   const sb = supabase as AnySb;
+
+  // Clearing a role also clears everything downstream of it (a chain can't
+  // hold an Approver decision above a vacated Reviewer slot).
+  const roleIdx = SIGNOFF_ORDER.indexOf(input.role);
+  const rolesToClear = SIGNOFF_ORDER.slice(roleIdx);
   const { error } = await sb
     .from("dm_diligence_signoffs")
     .delete()
     .eq("deal_item_id", input.dealItemId)
-    .eq("role", input.role);
+    .in("role", rolesToClear);
   if (error) return { error: error.message };
+
+  // Derive the headline status back DOWN as well — undoing every decision
+  // returns the item to not started (or in progress when documents exist).
+  await deriveStatusFromChain(sb, input.dealId, input.dealItemId);
   revalidate(input.dealId);
   return {};
 }
