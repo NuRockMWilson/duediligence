@@ -422,6 +422,35 @@ export async function unlinkDiligenceDocument(input: {
   return {};
 }
 
+/** Part 2: per-item document requirement mode ('all' | 'any'). Requires
+ *  migration 0099 (column document_requirement); errors surface plainly so a
+ *  pre-migration save says what to run. */
+export async function setDiligenceDocumentRequirement(input: {
+  dealId: string;
+  dealItemId: string;
+  mode: "all" | "any";
+}): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const sb = supabase as AnySb;
+  const { error } = await sb
+    .from("dm_diligence_deal_items")
+    .update({
+      document_requirement: input.mode,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", input.dealItemId)
+    .eq("deal_id", input.dealId);
+  if (error) {
+    return {
+      error: error.message.includes("document_requirement")
+        ? "Document-requirement mode needs migration 0099_diligence_document_requirement.sql — run it in the Supabase SQL editor first."
+        : error.message,
+    };
+  }
+  revalidate(input.dealId);
+  return {};
+}
+
 export async function getDiligenceDocSignedUrl(input: {
   filePath: string;
   expiresInSeconds?: number;
@@ -535,6 +564,25 @@ export async function recordDiligenceSignoff(input: {
               : `The ${label} hasn't signed off yet — the chain runs Preparer → Reviewer → Approver.`,
         };
       }
+    }
+  }
+
+  // Document gate (Part 2): the Approver cannot approve until the item's
+  // required linked documents are present. A link's existence IS presence, so
+  // both requirement modes ('all' / 'any') currently require at least one
+  // linked document; the mode is persisted per item for either/or semantics
+  // and future expected-document lists. Waived/na items never reach this path
+  // (they sit outside the chain).
+  if (input.role === "approver" && input.decision === "approved") {
+    const { count: docCount } = await sb
+      .from("dm_diligence_item_documents")
+      .select("document_id", { count: "exact", head: true })
+      .eq("deal_item_id", input.dealItemId);
+    if ((docCount ?? 0) === 0) {
+      return {
+        error:
+          "No documents are linked to this item — the Approver can't approve until the required documents are present. Upload or link a document first (or waive the item with a reason).",
+      };
     }
   }
 

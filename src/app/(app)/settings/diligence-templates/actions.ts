@@ -345,6 +345,55 @@ export async function unadoptTemplateForDeal(input: {
     .eq("template_id", input.templateId);
   if (error) return { error: error.message };
 
+  // Part 2: clean up the packet's STANDALONE item instances — but only the
+  // untouched ones (still not started, no documents, no sign-offs). Instances
+  // someone has worked keep their history and stay on the checklist.
+  {
+    const { data: tmplItems } = await supabase
+      .from("nurock_diligence_items")
+      .select("id")
+      .eq("template_id", input.templateId);
+    const itemIds = ((tmplItems ?? []) as Array<{ id: string }>).map((r) => r.id);
+    if (itemIds.length > 0) {
+      const { data: instances } = await supabase
+        .from("dm_diligence_deal_items")
+        .select("id")
+        .eq("deal_id", input.dealId)
+        .in("item_id", itemIds)
+        .eq("status", "not_started");
+      const instanceIds = ((instances ?? []) as Array<{ id: string }>).map(
+        (r) => r.id
+      );
+      if (instanceIds.length > 0) {
+        const [{ data: withDocs }, { data: withSignoffs }] = await Promise.all([
+          supabase
+            .from("dm_diligence_item_documents")
+            .select("deal_item_id")
+            .in("deal_item_id", instanceIds),
+          supabase
+            .from("dm_diligence_signoffs")
+            .select("deal_item_id")
+            .in("deal_item_id", instanceIds),
+        ]);
+        const touched = new Set([
+          ...((withDocs ?? []) as Array<{ deal_item_id: string }>).map(
+            (r) => r.deal_item_id
+          ),
+          ...((withSignoffs ?? []) as Array<{ deal_item_id: string }>).map(
+            (r) => r.deal_item_id
+          ),
+        ]);
+        const removable = instanceIds.filter((id) => !touched.has(id));
+        if (removable.length > 0) {
+          await supabase
+            .from("dm_diligence_deal_items")
+            .delete()
+            .in("id", removable);
+        }
+      }
+    }
+  }
+
   await logDiligenceEvent(supabase, {
     dealId: input.dealId,
     actorUserId: user?.id ?? null,

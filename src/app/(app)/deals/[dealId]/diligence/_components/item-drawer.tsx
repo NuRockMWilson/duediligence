@@ -23,10 +23,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge, FileIcon, type FileType } from "@/components/nurock-ui";
 import FileDropZone from "@/components/file-drop-zone";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { CheckCircle2, ExternalLink, Loader2, Trash2, Upload } from "lucide-react";
+import { CheckCircle2, ExternalLink, Link2, Loader2, Trash2, Upload } from "lucide-react";
 import { categoryLabel } from "@/lib/diligence/categories";
 import { formatDate } from "@/lib/format";
-import type { DiligenceItem, TeamMember } from "@/lib/data/diligence";
+import type { DiligenceItem, TeamMember, LibraryDoc } from "@/lib/data/diligence";
 import type { DiligenceStatus } from "@/lib/data/diligence-rollup";
 import { DILIGENCE_STATUSES, STATUS_META, WAIVE_STATES } from "./status";
 import {
@@ -35,6 +35,8 @@ import {
   setDiligenceDueDate,
   setDiligenceNotes,
   setDiligenceStatus,
+  setDiligenceDocumentRequirement,
+  linkDiligenceDocument,
   unlinkDiligenceDocument,
   uploadDiligenceDocument,
   recordDiligenceSignoff,
@@ -65,6 +67,7 @@ export function ItemDrawer({
   dealId,
   dealName,
   team,
+  library = [],
   canEdit,
   canApprove,
   open,
@@ -74,6 +77,8 @@ export function ItemDrawer({
   dealId: string;
   dealName: string;
   team: TeamMember[];
+  /** The deal's shared document library (Part 2) — for link-without-reupload. */
+  library?: LibraryDoc[];
   canEdit: boolean;
   canApprove: boolean;
   open: boolean;
@@ -84,6 +89,8 @@ export function ItemDrawer({
   const [file, setFile] = React.useState<File | null>(null);
   const [uploading, setUploading] = React.useState(false);
   const [notes, setNotes] = React.useState("");
+  // Part 2 — library-link picker selection.
+  const [linkDocId, setLinkDocId] = React.useState("");
 
   // Seed local notes when a new item opens.
   const [seededFor, setSeededFor] = React.useState<string | null>(null);
@@ -91,7 +98,20 @@ export function ItemDrawer({
     setSeededFor(item.id);
     setNotes(item.notes ?? "");
     setFile(null);
+    setLinkDocId("");
   }
+
+  // Library documents not already linked to this item.
+  const linkableLibraryDocs = React.useMemo(() => {
+    if (!item) return [] as LibraryDoc[];
+    const linked = new Set(item.docs.map((d) => d.id));
+    return library.filter((d) => !linked.has(d.id));
+  }, [library, item]);
+
+  // Item 7: unlink confirms via the app's standard modal, not confirm().
+  // (Declared BEFORE the null-item early return — hooks must run on every
+  // render or React throws on the null→item transition.)
+  const [docToRemove, setDocToRemove] = React.useState<string | null>(null);
 
   if (!item) return null;
 
@@ -178,9 +198,6 @@ export function ItemDrawer({
     }
     window.open(res.signedUrl, "_blank", "noopener");
   }
-
-  // Item 7: unlink confirms via the app's standard modal, not confirm().
-  const [docToRemove, setDocToRemove] = React.useState<string | null>(null);
 
   function onRemoveDoc(documentId: string) {
     setDocToRemove(documentId);
@@ -375,11 +392,52 @@ export function ItemDrawer({
             ) : null}
           </div>
 
-          {/* Documents */}
+          {/* Documents — many-to-many: this item's linked docs from the deal's
+              shared library (Part 2). Upload adds to the library AND links;
+              existing library docs link without re-uploading. */}
           <div className="space-y-2">
-            <Label className="text-xs font-medium">
-              Documents ({item.docs.length})
-            </Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-xs font-medium">
+                Documents ({item.docs.length})
+              </Label>
+              {/* Requirement mode — read by the Approver gate. */}
+              <div
+                className="flex items-center gap-1"
+                title="What the Approver gate expects before approval: every linked document ('All linked'), or any one of them ('Any one' — either/or items like EIN Letter / W-9)."
+              >
+                <span className="text-[10px] uppercase tracking-wider text-nurock-slate-light">
+                  Require
+                </span>
+                {(["all", "any"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    disabled={!canEdit || pending}
+                    onClick={() =>
+                      item.documentRequirement !== mode &&
+                      run(
+                        () =>
+                          setDiligenceDocumentRequirement({
+                            dealId,
+                            dealItemId: item!.id,
+                            mode,
+                          }),
+                        mode === "all"
+                          ? "Requiring all linked documents"
+                          : "Any one linked document suffices"
+                      )
+                    }
+                    className={`px-1.5 py-0.5 rounded text-[10px] border ${
+                      item.documentRequirement === mode
+                        ? "bg-nurock-navy text-white border-nurock-navy"
+                        : "border-nurock-border text-nurock-slate hover:border-nurock-navy/40"
+                    } disabled:opacity-50`}
+                  >
+                    {mode === "all" ? "All linked" : "Any one"}
+                  </button>
+                ))}
+              </div>
+            </div>
             {item.docs.length > 0 && (
               <div className="space-y-1.5">
                 {item.docs.map((d) => (
@@ -419,6 +477,46 @@ export function ItemDrawer({
                     )}
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Link an existing library document (no re-upload). */}
+            {canEdit && linkableLibraryDocs.length > 0 && (
+              <div className="flex items-center gap-2">
+                <Select value={linkDocId} onValueChange={setLinkDocId}>
+                  <SelectTrigger className="h-8 text-[12px] flex-1">
+                    <SelectValue placeholder="Link a document from the deal library…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {linkableLibraryDocs.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>
+                        {d.displayName ?? d.originalFilename}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8"
+                  disabled={!linkDocId || pending}
+                  onClick={() => {
+                    const id = linkDocId;
+                    if (!id) return;
+                    setLinkDocId("");
+                    run(
+                      () =>
+                        linkDiligenceDocument({
+                          dealId,
+                          dealItemId: item!.id,
+                          documentId: id,
+                        }),
+                      "Document linked"
+                    );
+                  }}
+                >
+                  <Link2 className="w-3.5 h-3.5 mr-1" /> Link
+                </Button>
               </div>
             )}
 

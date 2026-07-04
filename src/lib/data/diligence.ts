@@ -63,6 +63,10 @@ export interface DiligenceItem {
   waivedReason: string | null;
   docs: DiligenceDoc[];
   signoffs: DiligenceSignoff[];
+  /** Part 2 — document requirement mode for the approver gate: 'all' (every
+   *  linked document expected) or 'any' (one suffices, either/or items).
+   *  Defaults 'all'; read tolerantly so pre-migration-0099 deploys still work. */
+  documentRequirement: "all" | "any";
 }
 
 export interface TeamMember {
@@ -71,12 +75,21 @@ export interface TeamMember {
   email: string;
 }
 
+/** Part 2 — one document in the deal's shared library, with every checklist
+ *  item it is linked to (many-to-many). */
+export interface LibraryDoc extends DiligenceDoc {
+  linkedItemIds: string[];
+}
+
 export interface DiligenceChecklist {
   dealId: string;
   dealName: string;
   items: DiligenceItem[];
   team: TeamMember[];
   rollup: DiligenceRollup;
+  /** The deal's shared document library (every uploaded document, deduped,
+   *  with its linked items). */
+  library: LibraryDoc[];
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -128,20 +141,56 @@ export async function ensureDealDiligenceItems(
     default_required: boolean;
   }>).filter((c) => !have.has(c.id));
 
-  if (missing.length === 0) return 0;
+  // Part 2: STANDALONE packet items. For every non-canonical template this
+  // deal adopted, instantiate per-deal rows for items with NO crosswalk
+  // mapping — they're worked, signed off, and document-linked exactly like
+  // canonical items. Crosswalk-mapped packet items stay virtual (their
+  // coverage flows through the canonical items they map to). Running here
+  // (every diligence page load) makes packet adoption self-healing the same
+  // way the canonical checklist is.
+  const [{ data: adopted }, { data: mappedRows }] = await Promise.all([
+    supabase
+      .from("dm_diligence_deal_templates")
+      .select("template_id")
+      .eq("deal_id", dealId),
+    supabase.from("nurock_diligence_crosswalk").select("external_item_id"),
+  ]);
+  const adoptedExternal = ((adopted ?? []) as Array<{ template_id: string }>)
+    .map((r) => r.template_id)
+    .filter((id) => id !== templateId);
+  let standalone: Array<{ id: string; default_required: boolean }> = [];
+  if (adoptedExternal.length > 0) {
+    const mappedSet = new Set(
+      ((mappedRows ?? []) as Array<{ external_item_id: string }>).map(
+        (r) => r.external_item_id
+      )
+    );
+    const { data: extItems } = await supabase
+      .from("nurock_diligence_items")
+      .select("id, default_required")
+      .in("template_id", adoptedExternal)
+      .eq("is_active", true);
+    standalone = ((extItems ?? []) as Array<{
+      id: string;
+      default_required: boolean;
+    }>).filter((i) => !mappedSet.has(i.id) && !have.has(i.id));
+  }
+
+  const toInsert = [...missing, ...standalone];
+  if (toInsert.length === 0) return 0;
 
   const { error } = await supabase.from("dm_diligence_deal_items").insert(
-    missing.map((m) => ({
+    toInsert.map((m) => ({
       deal_id: dealId,
       item_id: m.id,
-      is_required: m.default_required,
+      is_required: m.default_required ?? true,
     }))
   );
   if (error) {
     console.error("[diligence] ensure insert failed:", error.message);
     return 0;
   }
-  return missing.length;
+  return toInsert.length;
 }
 
 export async function getDiligenceChecklist(
@@ -209,19 +258,50 @@ export async function getDiligenceChecklist(
     } | null;
   };
   const docsByItem = new Map<string, DiligenceDoc[]>();
+  // Part 2 — the shared library: every document deduped, with its linked items.
+  const libraryById = new Map<string, LibraryDoc>();
   for (const l of (linksRes.data ?? []) as LinkRow[]) {
     const d = l.dm_diligence_documents;
     if (!d) continue;
-    const arr = docsByItem.get(l.deal_item_id) ?? [];
-    arr.push({
+    const doc: DiligenceDoc = {
       id: d.id,
       displayName: d.display_name,
       originalFilename: d.original_filename,
       filePath: d.file_path,
       mimeType: d.mime_type,
       byteSize: d.byte_size,
-    });
+    };
+    const arr = docsByItem.get(l.deal_item_id) ?? [];
+    arr.push(doc);
     docsByItem.set(l.deal_item_id, arr);
+
+    const lib = libraryById.get(d.id) ?? { ...doc, linkedItemIds: [] };
+    lib.linkedItemIds.push(l.deal_item_id);
+    libraryById.set(d.id, lib);
+  }
+  const library = Array.from(libraryById.values()).sort((a, b) =>
+    (a.displayName ?? a.originalFilename).localeCompare(
+      b.displayName ?? b.originalFilename
+    )
+  );
+
+  // Part 2 — per-item document-requirement mode. Fetched separately and
+  // best-effort so a deploy ahead of migration 0099 (no column yet) degrades
+  // to the 'all' default instead of breaking the whole checklist query.
+  const reqByItem = new Map<string, "all" | "any">();
+  {
+    const { data: reqRows, error: reqErr } = await sb
+      .from("dm_diligence_deal_items")
+      .select("id, document_requirement")
+      .eq("deal_id", dealId);
+    if (!reqErr) {
+      for (const r of (reqRows ?? []) as Array<{
+        id: string;
+        document_requirement: string | null;
+      }>) {
+        reqByItem.set(r.id, r.document_requirement === "any" ? "any" : "all");
+      }
+    }
   }
 
   // Group sign-offs by deal-item.
@@ -287,6 +367,7 @@ export async function getDiligenceChecklist(
         waivedReason: r.waived_reason,
         docs: docsByItem.get(r.id) ?? [],
         signoffs: signoffsByItem.get(r.id) ?? [],
+        documentRequirement: reqByItem.get(r.id) ?? "all",
       };
     }
   );
@@ -310,5 +391,5 @@ export async function getDiligenceChecklist(
     todayIso
   );
 
-  return { dealId, dealName, items, team, rollup };
+  return { dealId, dealName, items, team, rollup, library };
 }

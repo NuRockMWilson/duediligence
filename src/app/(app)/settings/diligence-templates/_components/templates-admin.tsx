@@ -241,7 +241,9 @@ export function TemplatesAdmin({
 // -----------------------------------------------------------------------------
 // Manual create
 // -----------------------------------------------------------------------------
-function CreateDialog({
+// Exported so the deal Diligence page can surface "create" without a trip to
+// Settings (Part 2) — self-contained, only needs open/onOpenChange.
+export function CreateDialog({
   open,
   onOpenChange,
 }: {
@@ -360,7 +362,8 @@ function CreateDialog({
 // -----------------------------------------------------------------------------
 // Import wizard
 // -----------------------------------------------------------------------------
-function ImportDialog({
+// Exported for the deal Diligence page (Part 2), same as CreateDialog above.
+export function ImportDialog({
   open,
   onOpenChange,
 }: {

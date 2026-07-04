@@ -25,6 +25,9 @@ import {
   Clock,
   Loader2,
   Info,
+  Plus,
+  Upload,
+  ExternalLink,
 } from "lucide-react";
 import { Card, KpiTile, Badge, CircularProgress } from "@/components/nurock-ui";
 import { Button } from "@/components/ui/button";
@@ -65,11 +68,16 @@ import {
   setDiligenceAssignee,
   setDiligenceStatus,
   exportDiligencePacket,
+  getDiligenceDocSignedUrl,
 } from "../actions";
 import {
   adoptTemplateForDeal,
   unadoptTemplateForDeal,
 } from "../../../../settings/diligence-templates/actions";
+import {
+  CreateDialog,
+  ImportDialog,
+} from "../../../../settings/diligence-templates/_components/templates-admin";
 
 const ALL = "__all__";
 const UNASSIGNED = "__unassigned__";
@@ -114,7 +122,7 @@ export function DiligenceShell({
   canEdit: boolean;
   canApprove: boolean;
 }) {
-  const { dealId, dealName, items, team, rollup } = checklist;
+  const { dealId, dealName, items, team, rollup, library } = checklist;
   const router = useRouter();
 
   const [query, setQuery] = React.useState("");
@@ -128,6 +136,9 @@ export function DiligenceShell({
   const [exportOpen, setExportOpen] = React.useState(false);
   const [includeDocs, setIncludeDocs] = React.useState(true);
   const [exporting, setExporting] = React.useState(false);
+  // Part 2 — Create/Import surfaced on the main page (not just Settings).
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [importOpen, setImportOpen] = React.useState(false);
   const [pending, startTransition] = React.useTransition();
 
   const todayIso = React.useMemo(
@@ -315,6 +326,25 @@ export function DiligenceShell({
     });
   }
 
+  // Part 2 — library helpers: item titles for the "linked to" tooltip, and
+  // signed-URL open (same flow as the drawer's document view).
+  const itemTitleById = React.useMemo(() => {
+    const m = new Map<string, string>();
+    for (const it of items) {
+      m.set(it.id, it.itemNumber != null ? `${it.itemNumber}. ${it.title}` : it.title);
+    }
+    return m;
+  }, [items]);
+
+  async function onViewLibraryDoc(filePath: string) {
+    const res = await getDiligenceDocSignedUrl({ filePath });
+    if (res.error || !res.signedUrl) {
+      toast.error(res.error ?? "Could not open file");
+      return;
+    }
+    window.open(res.signedUrl, "_blank", "noopener");
+  }
+
   function adoptPacket(templateId: string) {
     startTransition(async () => {
       const res = await adoptTemplateForDeal({ dealId, templateId });
@@ -410,6 +440,29 @@ export function DiligenceShell({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* Part 2 — create/import surfaced here, not only in Settings. */}
+          {canEdit && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCreateOpen(true)}
+                className="h-8"
+              >
+                <Plus className="w-3.5 h-3.5 mr-1.5" />
+                New checklist/packet
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setImportOpen(true)}
+                className="h-8"
+              >
+                <Upload className="w-3.5 h-3.5 mr-1.5" />
+                Import Excel/CSV
+              </Button>
+            </>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -681,6 +734,88 @@ export function DiligenceShell({
         </div>
       )}
 
+      {/* Part 2 — shared per-deal document library. Any uploaded document can
+          be linked to any number of items (link from an item's drawer). */}
+      <div>
+        <div className="flex items-center justify-between mb-2 gap-3">
+          <h2 className="font-display text-sm uppercase tracking-wider text-nurock-slate">
+            Document Library
+          </h2>
+          <span className="text-[11px] text-nurock-slate-light hidden md:inline">
+            Uploaded once, linkable to any number of checklist items
+          </span>
+        </div>
+        {library.length === 0 ? (
+          <Card className="p-4 text-[12px] text-nurock-slate-light">
+            No documents on this deal yet. Upload one from any item&apos;s
+            drawer and it appears here, ready to link to other items without
+            re-uploading.
+          </Card>
+        ) : (
+          <Card className="p-0 overflow-hidden">
+            <div className="max-h-[280px] overflow-y-auto">
+              <table className="w-full text-[12.5px]">
+                <thead className="sticky top-0 bg-white">
+                  <tr className="text-left text-[10.5px] uppercase tracking-wider text-nurock-slate-light border-b border-nurock-border">
+                    <th className="px-4 py-2 font-medium">Document</th>
+                    <th className="px-3 py-2 font-medium w-[90px]">Size</th>
+                    <th className="px-3 py-2 font-medium w-[130px]">Linked to</th>
+                    <th className="px-3 py-2 w-[60px]" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {library.map((d) => {
+                    const linkedTitles = d.linkedItemIds
+                      .map((id) => itemTitleById.get(id))
+                      .filter(Boolean) as string[];
+                    return (
+                      <tr
+                        key={d.id}
+                        className="border-b border-nurock-border/60 last:border-b-0"
+                      >
+                        <td className="px-4 py-2">
+                          <span className="inline-flex items-center gap-2 min-w-0">
+                            <Paperclip className="w-3.5 h-3.5 text-nurock-slate-light shrink-0" />
+                            <span className="truncate text-nurock-black">
+                              {d.displayName ?? d.originalFilename}
+                            </span>
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-nurock-slate-light whitespace-nowrap">
+                          {d.byteSize == null
+                            ? "—"
+                            : d.byteSize < 1024
+                              ? "<1 KB"
+                              : `${(d.byteSize / 1024).toFixed(0)} KB`}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span
+                            className="text-nurock-slate cursor-default"
+                            title={linkedTitles.join("\n") || undefined}
+                          >
+                            {d.linkedItemIds.length}{" "}
+                            {d.linkedItemIds.length === 1 ? "item" : "items"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <button
+                            onClick={() => onViewLibraryDoc(d.filePath)}
+                            className="text-nurock-navy hover:text-nurock-navy-dark"
+                            title="Open document"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+      </div>
+
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative">
@@ -903,11 +1038,20 @@ export function DiligenceShell({
         dealId={dealId}
         dealName={dealName}
         team={team}
+        library={library}
         canEdit={canEdit}
         canApprove={canApprove}
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
       />
+
+      {/* Part 2 — the same create/import dialogs Settings uses. */}
+      {canEdit && (
+        <>
+          <CreateDialog open={createOpen} onOpenChange={setCreateOpen} />
+          <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
+        </>
+      )}
 
       {/* Item 7: packet removal — standard app modal instead of confirm(). */}
       <ConfirmDialog
