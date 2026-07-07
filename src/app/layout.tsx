@@ -20,9 +20,9 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NuRock — Development Management",
+  title: "NuRock — Due Diligence",
   description:
-    "Construction draw, invoice, and capital tracking for NuRock LIHTC projects.",
+    "Closing checklist, document collection, and sign-off tracking for NuRock LIHTC projects.",
 };
 
 export default function RootLayout({
