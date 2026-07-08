@@ -251,6 +251,17 @@ export async function getDiligenceReadinessByDeal(): Promise<
 // doesn't capture), never hidden as 0/0 = 100%.
 // =============================================================================
 
+export type FinancierCoverageItemState = "satisfied" | "outstanding" | "unmapped";
+
+export interface FinancierCoverageItem {
+  itemNumber: number | null;
+  title: string;
+  category: string;
+  /** satisfied = mapped canonical requirement met; outstanding = mapped but
+   *  not yet approved; unmapped = no NuRock-standard crosswalk yet. */
+  state: FinancierCoverageItemState;
+}
+
 export interface FinancierCoverage {
   templateId: string;
   name: string;
@@ -261,6 +272,9 @@ export interface FinancierCoverage {
   satisfied: number;
   unmappedCount: number;
   coveragePct: number;
+  /** Per-item detail — powers the per-financier packet export (the lender's own
+   *  item list with satisfied state). Aggregate consumers can ignore it. */
+  items: FinancierCoverageItem[];
 }
 
 export async function getDiligenceFinancierCoverage(
@@ -303,7 +317,7 @@ export async function getDiligenceFinancierCoverage(
   const [{ data: extItems }, { data: canonicalItems }] = await Promise.all([
     sb
       .from("nurock_diligence_items")
-      .select("id, template_id, item_type, is_active")
+      .select("id, template_id, item_number, category, title, item_type, is_active")
       .in("template_id", externalTemplateIds),
     sb
       .from("dm_diligence_deal_items")
@@ -314,6 +328,9 @@ export async function getDiligenceFinancierCoverage(
   type ExtItem = {
     id: string;
     template_id: string;
+    item_number: number | null;
+    category: string;
+    title: string;
     item_type: string;
     is_active: boolean;
   };
@@ -368,22 +385,29 @@ export async function getDiligenceFinancierCoverage(
 
   return externalTemplates
     .map((t) => {
-      const items = itemsByTemplate.get(t.id) ?? [];
-      let satisfied = 0;
-      let unmapped = 0;
-      for (const item of items) {
+      const templateItems = itemsByTemplate.get(t.id) ?? [];
+      const detailItems: FinancierCoverageItem[] = templateItems.map((item) => {
         const mapping = mappingByExternal.get(item.id);
+        let state: FinancierCoverageItemState;
         if (!mapping || mapping.canonical.length === 0) {
-          unmapped++;
-          continue;
+          state = "unmapped";
+        } else {
+          const ok =
+            mapping.mode === "any"
+              ? mapping.canonical.some((c) => approvedCanonical.has(c))
+              : mapping.canonical.every((c) => approvedCanonical.has(c));
+          state = ok ? "satisfied" : "outstanding";
         }
-        const ok =
-          mapping.mode === "any"
-            ? mapping.canonical.some((c) => approvedCanonical.has(c))
-            : mapping.canonical.every((c) => approvedCanonical.has(c));
-        if (ok) satisfied++;
-      }
-      const total = items.length;
+        return {
+          itemNumber: item.item_number,
+          title: item.title,
+          category: item.category,
+          state,
+        };
+      });
+      const total = detailItems.length;
+      const satisfied = detailItems.filter((i) => i.state === "satisfied").length;
+      const unmapped = detailItems.filter((i) => i.state === "unmapped").length;
       return {
         templateId: t.id,
         name: t.name,
@@ -393,6 +417,7 @@ export async function getDiligenceFinancierCoverage(
         satisfied,
         unmappedCount: unmapped,
         coveragePct: total === 0 ? 100 : Math.round((satisfied / total) * 100),
+        items: detailItems,
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));

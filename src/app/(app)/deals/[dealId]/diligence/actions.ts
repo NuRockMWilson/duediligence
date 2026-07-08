@@ -28,6 +28,7 @@ import { getDiligenceFinancierCoverage } from "@/lib/data/diligence-rollup";
 import {
   buildDiligencePacketPdf,
   buildDiligencePacketZip,
+  buildFinancierPacketPdf,
   type PacketDoc,
 } from "@/lib/diligence/packet";
 import { logDiligenceEvent } from "@/lib/diligence/audit";
@@ -880,6 +881,49 @@ export async function exportDiligencePacket(input: {
       base64: Buffer.from(zip).toString("base64"),
       filename: `${base}-due-diligence-${stamp}.zip`,
       mime: "application/zip",
+    };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Per-financier packet export — the lender's OWN required-item list with each
+// item's satisfied state (vs. exportDiligencePacket's NuRock-canonical
+// checklist). Read-only; no schema change (sources the crosswalk coverage).
+// -----------------------------------------------------------------------------
+export async function exportFinancierPacket(input: {
+  dealId: string;
+  templateId: string;
+}): Promise<{ base64?: string; filename?: string; mime?: string; error?: string }> {
+  try {
+    const [checklist, financiers] = await Promise.all([
+      getDiligenceChecklist(input.dealId),
+      getDiligenceFinancierCoverage(input.dealId),
+    ]);
+    const financier = financiers.find((f) => f.templateId === input.templateId);
+    if (!financier) return { error: "This packet is no longer on the deal." };
+
+    const generatedOn = new Date().toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const pdf = await buildFinancierPacketPdf({
+      dealName: checklist.dealName,
+      generatedOn,
+      financier,
+    });
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    const dealBase = checklist.dealName.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    const finBase = (financier.financierName ?? financier.name)
+      .replace(/[^a-z0-9]+/gi, "-")
+      .toLowerCase();
+    return {
+      base64: Buffer.from(pdf).toString("base64"),
+      filename: `${dealBase}-${finBase}-packet-${stamp}.pdf`,
+      mime: "application/pdf",
     };
   } catch (e) {
     return { error: (e as Error).message };

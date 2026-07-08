@@ -27,6 +27,7 @@ import type { DiligenceItem } from "@/lib/data/diligence";
 import type {
   DiligenceRollup,
   FinancierCoverage,
+  FinancierCoverageItem,
 } from "@/lib/data/diligence-rollup";
 
 export interface PacketPdfInput {
@@ -183,6 +184,145 @@ export async function buildDiligencePacketPdf(
           color: PDF_COLORS.slateLight,
         });
       }
+      y -= 14;
+    }
+    y -= 6;
+  }
+
+  return brand.doc.save();
+}
+
+// =============================================================================
+// Per-financier packet PDF — the LENDER's own required-item list with each
+// item's satisfied state (vs. the NuRock-canonical checklist above). Sourced
+// from the crosswalk coverage (getDiligenceFinancierCoverage → .items).
+// =============================================================================
+export interface FinancierPacketPdfInput {
+  dealName: string;
+  generatedOn: string; // human date
+  financier: FinancierCoverage;
+}
+
+export async function buildFinancierPacketPdf(
+  input: FinancierPacketPdfInput
+): Promise<Uint8Array> {
+  const brand = await createBrandedPdf();
+  const left = LETTERHEAD.marginLeft;
+  const right = LETTERHEAD.pageWidth - LETTERHEAD.marginRight;
+
+  let page = brand.addPage();
+  let y: number = LETTERHEAD.contentTop;
+
+  const f = input.financier;
+  const financierLabel = f.financierName ?? f.name;
+
+  // --- Cover ---
+  y = drawHeading(page, "Financier Diligence Packet", brand, { x: left, y });
+  drawText(page, `${input.dealName}  -  ${financierLabel}`, brand, {
+    x: left,
+    y,
+    size: 12,
+    font: brand.fontBold,
+    color: PDF_COLORS.black,
+  });
+  drawTextRight(page, input.generatedOn, brand, {
+    rightX: right,
+    y,
+    size: 9,
+    color: PDF_COLORS.slate,
+  });
+  y -= 22;
+
+  drawText(
+    page,
+    `Coverage ${f.coveragePct}%  -  ${f.satisfied}/${f.total} required items satisfied${
+      f.unmappedCount ? `  -  ${f.unmappedCount} not yet mapped` : ""
+    }`,
+    brand,
+    { x: left, y, size: 10, color: PDF_COLORS.slate }
+  );
+  y -= 24;
+
+  // --- Required items, grouped by category ---
+  const groups = new Map<string, FinancierCoverageItem[]>();
+  for (const it of f.items) {
+    const arr = groups.get(it.category) ?? [];
+    arr.push(it);
+    groups.set(it.category, arr);
+  }
+  const orderedCats = Array.from(groups.keys()).sort(
+    (a, b) => categoryOrder(a) - categoryOrder(b)
+  );
+
+  const ensureRoom = (needed: number) => {
+    if (y - needed < LETTERHEAD.contentBottom) {
+      page = brand.addPage();
+      y = LETTERHEAD.contentTop;
+    }
+  };
+
+  const xStatus = 430;
+
+  if (f.items.length === 0) {
+    drawText(page, "This packet has no required items.", brand, {
+      x: left,
+      y,
+      size: 9,
+      color: PDF_COLORS.slateLight,
+    });
+    return brand.doc.save();
+  }
+
+  for (const cat of orderedCats) {
+    ensureRoom(28);
+    y = drawSubheading(page, categoryLabel(cat), brand, { x: left, y });
+    drawText(page, "REQUIRED ITEM", brand, {
+      x: left,
+      y,
+      size: 7.5,
+      font: brand.fontBold,
+      color: PDF_COLORS.slateLight,
+    });
+    drawTextRight(page, "STATUS", brand, {
+      rightX: right,
+      y,
+      size: 7.5,
+      font: brand.fontBold,
+      color: PDF_COLORS.slateLight,
+    });
+    y -= 13;
+
+    const items = groups
+      .get(cat)!
+      .slice()
+      .sort((a, b) => (a.itemNumber ?? 99999) - (b.itemNumber ?? 99999));
+    for (const it of items) {
+      ensureRoom(14);
+      const label = `${it.itemNumber ?? ""} ${it.title}`.trim();
+      drawText(page, truncateToWidth(label, brand.font, 9, xStatus - left - 6), brand, {
+        x: left,
+        y,
+        size: 9,
+        color: PDF_COLORS.black,
+      });
+      const statusText =
+        it.state === "satisfied"
+          ? "Satisfied"
+          : it.state === "unmapped"
+            ? "Not mapped"
+            : "Outstanding";
+      const statusColor =
+        it.state === "satisfied"
+          ? PDF_COLORS.navy
+          : it.state === "unmapped"
+            ? PDF_COLORS.slateLight
+            : PDF_COLORS.slate;
+      drawTextRight(page, statusText, brand, {
+        rightX: right,
+        y,
+        size: 8.5,
+        color: statusColor,
+      });
       y -= 14;
     }
     y -= 6;

@@ -68,6 +68,7 @@ import {
   setDiligenceAssignee,
   setDiligenceStatus,
   exportDiligencePacket,
+  exportFinancierPacket,
   getDiligenceDocSignedUrl,
 } from "../actions";
 import {
@@ -136,6 +137,7 @@ export function DiligenceShell({
   const [exportOpen, setExportOpen] = React.useState(false);
   const [includeDocs, setIncludeDocs] = React.useState(true);
   const [exporting, setExporting] = React.useState(false);
+  const [exportingFinancierId, setExportingFinancierId] = React.useState<string | null>(null);
   // Part 2 — Create/Import surfaced on the main page (not just Settings).
   const [createOpen, setCreateOpen] = React.useState(false);
   const [importOpen, setImportOpen] = React.useState(false);
@@ -401,6 +403,24 @@ export function DiligenceShell({
       });
       toast.success("Packet generated");
       setExportOpen(false);
+    });
+  }
+
+  function runFinancierExport(templateId: string) {
+    setExportingFinancierId(templateId);
+    startTransition(async () => {
+      const res = await exportFinancierPacket({ dealId, templateId });
+      setExportingFinancierId(null);
+      if (res.error || !res.base64 || !res.filename || !res.mime) {
+        toast.error(res.error ?? "Export failed");
+        return;
+      }
+      triggerDownload({
+        base64: res.base64,
+        filename: res.filename,
+        mime: res.mime,
+      });
+      toast.success("Financier packet generated");
     });
   }
 
@@ -695,6 +715,18 @@ export function DiligenceShell({
                         <Badge tone={STATUS_BADGE_BY_TONE[tone]}>
                           {f.coveragePct}%
                         </Badge>
+                        <button
+                          onClick={() => runFinancierExport(f.templateId)}
+                          disabled={exportingFinancierId === f.templateId}
+                          className="text-nurock-slate-light hover:text-nurock-navy disabled:opacity-50"
+                          title="Export this financier's item list (with satisfied state) as a PDF"
+                        >
+                          {exportingFinancierId === f.templateId ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <FileDown className="w-3.5 h-3.5" />
+                          )}
+                        </button>
                         {canEdit && (
                           <button
                             onClick={() => removePacket(f.templateId, f.name)}
