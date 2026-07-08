@@ -30,6 +30,11 @@ import { DealSwitcher, type DealOption } from "./deal-switcher";
 import AccountMenu from "@/components/account-menu";
 import { SaveStatus } from "@/components/save-status";
 
+// Cross-app home target — the Underwriting portfolio dashboard. Absolute URL
+// (crosses Vercel deployments); overridable per-env. Mirrors the module switcher.
+const UNDERWRITING_URL =
+  process.env.NEXT_PUBLIC_UNDERWRITING_URL ?? "https://nurockmodel.vercel.app";
+
 interface DealHeaderProps {
   dealId: string;
   dealName: string;
@@ -76,14 +81,24 @@ export default function DealHeader({
       <div className="border-b border-white/10">
         <div className="max-w-[1600px] mx-auto px-3 md:px-5 flex items-center justify-between gap-4 min-h-[44px]">
           <div className="flex items-center gap-3 min-w-0">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/nurock-logo-reversed.png"
-              alt="NuRock"
-              className="h-9 w-auto flex-shrink-0 drop-shadow-sm"
-              width={160}
-              height={128}
-            />
+            {/* P1: logo → HOME = the Underwriting portfolio dashboard. Cross-
+                deployment, so an ABSOLUTE URL via a plain anchor (not next/link).
+                Keyboard-focusable. */}
+            <a
+              href={UNDERWRITING_URL}
+              title="Go to the portfolio dashboard"
+              aria-label="Go to the portfolio dashboard"
+              className="flex-shrink-0 rounded transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/nurock-logo-reversed.png"
+                alt="NuRock"
+                className="h-9 w-auto drop-shadow-sm"
+                width={160}
+                height={128}
+              />
+            </a>
             <div className="min-w-0 flex-shrink-0 hidden sm:block">
               <div className="font-display text-sm uppercase tracking-[0.14em] leading-tight">
                 NuRock
