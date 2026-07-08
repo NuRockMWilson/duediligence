@@ -20,7 +20,6 @@
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  FileText,
   RefreshCw,
   ScrollText,
 } from "lucide-react";
@@ -193,14 +192,11 @@ function ToolsCluster({ dealId }: { dealId: string }) {
   const router = useRouter();
   return (
     <div className="flex items-center gap-1.5 flex-shrink-0">
-      <Link
-        href={`/deals/${dealId}/active-draw`}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-nurock-tan/20 hover:bg-nurock-tan/30 text-nurock-tan border border-nurock-tan/40 transition-colors font-display uppercase tracking-wider text-[10px]"
-        title="Open the active draw — assemble + submit the current draw package"
-      >
-        <FileText className="w-3 h-3" />
-        Draw Package
-      </Link>
+      {/* BUG-FIX: the "Draw Package" → /deals/{id}/active-draw link was inherited
+          from the devmgmt fork, but active-draw is a Development-module route and
+          404s here (its <Link> prefetch caused the leaked 404 on every Diligence
+          deal page). Draws aren't a Diligence workflow; cross-module access to
+          Development is already provided by the ModuleSwitcher (absolute URL). */}
       <IconBtn
         icon={<RefreshCw className="w-3.5 h-3.5" />}
         label="Refresh"
