@@ -207,18 +207,6 @@ export async function setDiligenceCompletedDate(input: {
 }): Promise<{ error?: string }> {
   const supabase = await createClient();
   const sb = supabase as AnySb;
-  // TEMP DEBUG (remove after live verification) — row id + dates written.
-  const { data: beforeRow } = await sb
-    .from("dm_diligence_deal_items")
-    .select("id, due_date, completed_date")
-    .eq("id", input.dealItemId)
-    .maybeSingle();
-  console.log("[diligence:completed_date]", {
-    dealItemId: input.dealItemId,
-    dueDate: (beforeRow as { due_date?: string | null } | null)?.due_date ?? null,
-    before: (beforeRow as { completed_date?: string | null } | null)?.completed_date ?? null,
-    writing: input.completedDate,
-  });
   const { error } = await sb
     .from("dm_diligence_deal_items")
     .update({
@@ -687,7 +675,7 @@ async function deriveStatusFromChain(
   if (next === "approved") {
     const { data: compRow, error: compReadErr } = await sb
       .from("dm_diligence_deal_items")
-      .select("completed_date, due_date")
+      .select("completed_date")
       .eq("id", dealItemId)
       .maybeSingle();
     const existing =
@@ -695,13 +683,6 @@ async function deriveStatusFromChain(
       null;
     if (!compReadErr && !existing) {
       const today = new Date().toISOString().slice(0, 10);
-      // TEMP DEBUG (remove after live verification)
-      console.log("[diligence:completed_date] default-on-approve", {
-        dealItemId,
-        dueDate:
-          (compRow as { due_date?: string | null } | null)?.due_date ?? null,
-        writing: today,
-      });
       await sb
         .from("dm_diligence_deal_items")
         .update({ completed_date: today })
