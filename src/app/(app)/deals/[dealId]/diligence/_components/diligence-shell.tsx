@@ -62,6 +62,7 @@ import type {
 import type { TemplateSummary } from "@/lib/data/diligence-templates";
 import type { DeadlineItem } from "@/lib/data/diligence-deadlines";
 import { DILIGENCE_STATUSES, STATUS_META, WAIVE_STATES } from "./status";
+import { MetPill, metVarianceDays } from "./met-pill";
 import { ItemDrawer } from "./item-drawer";
 import {
   nudgeDiligenceAssignee,
@@ -306,21 +307,28 @@ export function DiligenceShell({
 
   function handleExport(scopeIds?: string[]) {
     const rows = (scopeIds ? items.filter((i) => scopeIds.includes(i.id)) : items).map(
-      (i) => [
-        categoryLabel(i.category),
-        i.itemNumber ?? "",
-        i.title,
-        STATUS_META[i.status].label,
-        i.isRequired ? "Required" : "Optional",
-        i.assigneeName ?? "",
-        i.dueDate ?? "",
-        i.docs.length,
-        i.notes ?? "",
-      ]
+      (i) => {
+        const variance = i.completedDate
+          ? metVarianceDays(i.dueDate, i.completedDate)
+          : null;
+        return [
+          categoryLabel(i.category),
+          i.itemNumber ?? "",
+          i.title,
+          STATUS_META[i.status].label,
+          i.isRequired ? "Required" : "Optional",
+          i.assigneeName ?? "",
+          i.dueDate ?? "",
+          i.completedDate ?? "",
+          variance === null ? "" : variance > 0 ? `Late +${variance}d` : variance < 0 ? `On time −${-variance}d` : "On time ±0d",
+          i.docs.length,
+          i.notes ?? "",
+        ];
+      }
     );
     import("@/lib/export/download").then(({ downloadCsv }) => {
       downloadCsv(
-        ["Category", "Item #", "Item", "Status", "Required", "Assignee", "Due", "Docs", "Notes"],
+        ["Category", "Item #", "Item", "Status", "Required", "Assignee", "Due", "Met", "On Time / Late", "Docs", "Notes"],
         rows,
         `${dealName.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-due-diligence-${todayIso}.csv`
       );
@@ -972,6 +980,7 @@ export function DiligenceShell({
                 <th className="px-3 py-2 font-display font-medium">Status</th>
                 <th className="px-3 py-2 font-display font-medium">Assignee</th>
                 <th className="px-3 py-2 font-display font-medium">Due</th>
+                <th className="px-3 py-2 font-display font-medium">Met</th>
                 <th className="px-3 py-2 font-display font-medium text-center">
                   Docs
                 </th>
@@ -981,7 +990,7 @@ export function DiligenceShell({
               {groups.map((g) => (
                 <React.Fragment key={g.key}>
                   <tr className="bg-nurock-gray/40 border-b border-nurock-border">
-                    <td colSpan={6} className="px-4 py-1.5">
+                    <td colSpan={7} className="px-4 py-1.5">
                       <span className="font-display text-[11px] uppercase tracking-[0.08em] text-nurock-navy font-semibold">
                         {g.label}
                       </span>
@@ -1044,6 +1053,27 @@ export function DiligenceShell({
                           }`}
                         >
                           {i.dueDate ? formatDate(i.dueDate) : "—"}
+                        </td>
+                        {/* Actual met (migration 0101) — target vs. actual +
+                            day variance. Waived/NA items show "—": they were
+                            never "met", so an on-time/late reading would be
+                            fabricated. */}
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {WAIVE_STATES.includes(i.status) && !i.completedDate ? (
+                            <span className="text-nurock-slate-light">—</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5">
+                              <MetPill
+                                dueDate={i.dueDate}
+                                completedDate={i.completedDate}
+                              />
+                              {i.completedDate && (
+                                <span className="font-mono tabular-nums text-[11px] text-nurock-slate">
+                                  {formatDate(i.completedDate)}
+                                </span>
+                              )}
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-center">
                           {i.docs.length > 0 ? (

@@ -39,10 +39,12 @@ import { formatDate } from "@/lib/format";
 import type { DiligenceItem, TeamMember, LibraryDoc } from "@/lib/data/diligence";
 import type { DiligenceStatus } from "@/lib/data/diligence-rollup";
 import { DILIGENCE_STATUSES, STATUS_META, WAIVE_STATES } from "./status";
+import { MetPill } from "./met-pill";
 import {
   getDiligenceDocSignedUrl,
   setDiligenceAssignee,
   setDiligenceDueDate,
+  setDiligenceCompletedDate,
   setDiligenceNotes,
   setDiligenceStatus,
   setDiligenceDocumentRequirement,
@@ -129,6 +131,9 @@ export function ItemDrawer({
   // (Declared BEFORE the null-item early return — hooks must run on every
   // render or React throws on the null→item transition.)
   const [docToRemove, setDocToRemove] = React.useState<string | null>(null);
+  // Clearing an actual-met date is destructive to user-recorded truth —
+  // confirm via the app modal before wiping (migration 0101 brief).
+  const [confirmClearMet, setConfirmClearMet] = React.useState(false);
 
   if (!item) return null;
 
@@ -375,6 +380,72 @@ export function ItemDrawer({
                   disabled={pending}
                   className="shrink-0 h-9 px-2.5 text-[12px] rounded border border-nurock-border text-nurock-slate hover:text-red-700 hover:border-red-300 disabled:opacity-50"
                   title="Remove the due date"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Actual met date (migration 0101) — target vs. actual. Independent
+              of the due date above (setting it never modifies the target).
+              Sign-off approval defaults it to today; here it can be set,
+              back-dated, or (with confirmation) cleared. */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="dd-met" className="text-xs font-medium">
+                Actual met
+              </Label>
+              <MetPill dueDate={item.dueDate} completedDate={item.completedDate} />
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                id="dd-met"
+                type="date"
+                // Same re-key trick as the due date — uncontrolled input
+                // re-syncs after a server refresh.
+                key={`met-${item.id}-${item.completedDate ?? "none"}`}
+                defaultValue={item.completedDate ?? ""}
+                disabled={!canEdit || pending}
+                onChange={(e) =>
+                  run(() =>
+                    setDiligenceCompletedDate({
+                      dealId,
+                      dealItemId: item.id,
+                      completedDate: e.target.value || null,
+                    })
+                  )
+                }
+                className="w-full h-9 px-2 text-sm border rounded border-nurock-border"
+              />
+              {canEdit && !item.completedDate && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    run(
+                      () =>
+                        setDiligenceCompletedDate({
+                          dealId,
+                          dealItemId: item.id,
+                          completedDate: new Date().toISOString().slice(0, 10),
+                        }),
+                      "Marked met today"
+                    )
+                  }
+                  disabled={pending}
+                  className="shrink-0 h-9 px-2.5 text-[12px] rounded border border-nurock-border text-nurock-slate hover:text-emerald-700 hover:border-emerald-300 disabled:opacity-50"
+                  title="Record this item as met today (editable afterwards)"
+                >
+                  Met today
+                </button>
+              )}
+              {canEdit && item.completedDate && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmClearMet(true)}
+                  disabled={pending}
+                  className="shrink-0 h-9 px-2.5 text-[12px] rounded border border-nurock-border text-nurock-slate hover:text-red-700 hover:border-red-300 disabled:opacity-50"
+                  title="Clear the recorded met date (asks for confirmation)"
                 >
                   Clear
                 </button>
@@ -812,6 +883,29 @@ export function ItemDrawer({
           destructive
           pending={pending}
           onConfirm={confirmRemoveDoc}
+        />
+        <ConfirmDialog
+          open={confirmClearMet}
+          onOpenChange={setConfirmClearMet}
+          title="Clear the met date?"
+          description={`This removes the recorded actual-met date${
+            item.completedDate ? ` (${formatDate(item.completedDate)})` : ""
+          }. The due date and item status are not affected.`}
+          confirmLabel="Clear date"
+          destructive
+          pending={pending}
+          onConfirm={() => {
+            setConfirmClearMet(false);
+            run(
+              () =>
+                setDiligenceCompletedDate({
+                  dealId,
+                  dealItemId: item.id,
+                  completedDate: null,
+                }),
+              "Met date cleared"
+            );
+          }}
         />
       </SheetContent>
     </Sheet>

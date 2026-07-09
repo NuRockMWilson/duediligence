@@ -78,7 +78,11 @@ export default function DealHeader({
           ROW 1 — Identity (mirror of UW Header.tsx row 1)
           ============================================================ */}
       <div className="border-b border-white/10">
-        <div className="max-w-[1600px] mx-auto px-3 md:px-5 flex items-center justify-between gap-4 min-h-[44px]">
+        {/* Top-bar container — BYTE-IDENTICAL across the three apps
+            ("max-w-[1600px] mx-auto px-5", see nurock-devmgmt/docs/shell.md §1):
+            same max-width AND same flat padding, so the logo's absolute X
+            never shifts when switching modules. */}
+        <div className="max-w-[1600px] mx-auto px-5 flex items-center justify-between gap-4 min-h-[44px]">
           <div className="flex items-center gap-3 min-w-0">
             {/* P1: logo → HOME = the Underwriting portfolio dashboard. Cross-
                 deployment, so an ABSOLUTE URL via a plain anchor (not next/link).
@@ -148,7 +152,8 @@ export default function DealHeader({
           LAYER 2 — Contextual project ribbon: project selector (always
           visible, full single line) + module vitals (md+) + tools (md+).
           ============================================================ */}
-      <div className="hidden md:flex max-w-[1600px] mx-auto px-3 md:px-5 items-center justify-between gap-3 min-h-[44px]">
+      {/* Row 2 shares the identical container bounds (shell.md §1). */}
+      <div className="hidden md:flex max-w-[1600px] mx-auto px-5 items-center justify-between gap-3 min-h-[44px]">
         {/* Left — module vitals (KPI chips). The deal switcher moved UP to row 1
             to match the underwriting model; row 2 now carries vitals + tools. */}
         <div className="flex items-center gap-3 min-w-0">

@@ -58,6 +58,10 @@ export interface DiligenceItem {
   assigneeUserId: string | null;
   assigneeName: string | null;
   dueDate: string | null;
+  /** Actual date the item was met (migration 0101). Independent of dueDate;
+   *  defaults to today when the sign-off chain approves; editable/back-datable.
+   *  Read tolerantly so pre-migration deploys still work. */
+  completedDate: string | null;
   notes: string | null;
   approvedAt: string | null;
   waivedReason: string | null;
@@ -315,6 +319,25 @@ export async function getDiligenceChecklist(
     }
   }
 
+  // Actual completed/met dates (migration 0101) — best-effort like above, so
+  // a deploy ahead of the migration degrades to "no completed dates" instead
+  // of breaking the whole checklist query.
+  const completedByItem = new Map<string, string>();
+  {
+    const { data: compRows, error: compErr } = await sb
+      .from("dm_diligence_deal_items")
+      .select("id, completed_date")
+      .eq("deal_id", dealId);
+    if (!compErr) {
+      for (const r of (compRows ?? []) as Array<{
+        id: string;
+        completed_date: string | null;
+      }>) {
+        if (r.completed_date) completedByItem.set(r.id, r.completed_date);
+      }
+    }
+  }
+
   // Expected-document slots (migration 0100) — best-effort like above, so a
   // deploy ahead of the migration degrades to "no slots" (>=1-doc gate).
   const expectedByItem = new Map<string, ExpectedDoc[]>();
@@ -396,6 +419,7 @@ export async function getDiligenceChecklist(
           ? nameByUser.get(r.assignee_user_id) ?? null
           : null,
         dueDate: r.due_date,
+        completedDate: completedByItem.get(r.id) ?? null,
         notes: r.notes,
         approvedAt: r.approved_at,
         waivedReason: r.waived_reason,

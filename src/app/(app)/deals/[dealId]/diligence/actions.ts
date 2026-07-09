@@ -193,6 +193,45 @@ export async function setDiligenceDueDate(input: {
   return {};
 }
 
+/**
+ * Actual completed/met date (migration 0101). Independent of due_date —
+ * setting/clearing it NEVER touches the due date or status. The sign-off
+ * chain defaults it to today on approval (see deriveStatusFromChain); this
+ * action is the manual edit path (back-date, correct, or clear — the UI
+ * confirms before clearing a manually-entered date).
+ */
+export async function setDiligenceCompletedDate(input: {
+  dealId: string;
+  dealItemId: string;
+  completedDate: string | null; // ISO yyyy-mm-dd
+}): Promise<{ error?: string }> {
+  const supabase = await createClient();
+  const sb = supabase as AnySb;
+  // TEMP DEBUG (remove after live verification) — row id + dates written.
+  const { data: beforeRow } = await sb
+    .from("dm_diligence_deal_items")
+    .select("id, due_date, completed_date")
+    .eq("id", input.dealItemId)
+    .maybeSingle();
+  console.log("[diligence:completed_date]", {
+    dealItemId: input.dealItemId,
+    dueDate: (beforeRow as { due_date?: string | null } | null)?.due_date ?? null,
+    before: (beforeRow as { completed_date?: string | null } | null)?.completed_date ?? null,
+    writing: input.completedDate,
+  });
+  const { error } = await sb
+    .from("dm_diligence_deal_items")
+    .update({
+      completed_date: input.completedDate,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", input.dealItemId)
+    .eq("deal_id", input.dealId);
+  if (error) return { error: error.message };
+  revalidate(input.dealId);
+  return {};
+}
+
 export async function setDiligenceNotes(input: {
   dealId: string;
   dealItemId: string;
@@ -638,6 +677,38 @@ async function deriveStatusFromChain(
     .update(patch)
     .eq("id", dealItemId)
     .eq("deal_id", dealId);
+
+  // Completed/met date (migration 0101): approval defaults it to today IF
+  // NULL — a manually back-dated value is never overwritten by re-derivation.
+  // Separate best-effort write (not folded into `patch`) so a deploy ahead of
+  // the migration doesn't break the sign-off chain itself. Un-approving does
+  // NOT silently wipe the date — clearing is an explicit, confirmed action in
+  // the drawer (setDiligenceCompletedDate).
+  if (next === "approved") {
+    const { data: compRow, error: compReadErr } = await sb
+      .from("dm_diligence_deal_items")
+      .select("completed_date, due_date")
+      .eq("id", dealItemId)
+      .maybeSingle();
+    const existing =
+      (compRow as { completed_date?: string | null } | null)?.completed_date ??
+      null;
+    if (!compReadErr && !existing) {
+      const today = new Date().toISOString().slice(0, 10);
+      // TEMP DEBUG (remove after live verification)
+      console.log("[diligence:completed_date] default-on-approve", {
+        dealItemId,
+        dueDate:
+          (compRow as { due_date?: string | null } | null)?.due_date ?? null,
+        writing: today,
+      });
+      await sb
+        .from("dm_diligence_deal_items")
+        .update({ completed_date: today })
+        .eq("id", dealItemId)
+        .eq("deal_id", dealId);
+    }
+  }
 }
 
 export async function recordDiligenceSignoff(input: {
