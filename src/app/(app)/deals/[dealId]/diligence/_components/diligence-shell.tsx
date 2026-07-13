@@ -28,6 +28,9 @@ import {
   Plus,
   Upload,
   ExternalLink,
+  ChevronDown,
+  ChevronRight,
+  CheckCircle2,
 } from "lucide-react";
 import { Card, KpiTile, Badge, CircularProgress } from "@/components/nurock-ui";
 import { Button } from "@/components/ui/button";
@@ -204,7 +207,9 @@ export function DiligenceShell({
     });
   }, [items, query, statusFilter, categoryFilter, assigneeFilter, overdueOnly, todayIso]);
 
-  // Group filtered items by category (seed order).
+  // Group filtered items by category (seed order), with a per-category status
+  // roll-up so a COLLAPSED section still reads at a glance (done/total + a
+  // slim bar, plus overdue / in-review counts).
   const groups = React.useMemo(() => {
     const byCat = new Map<string, DiligenceItem[]>();
     for (const i of filtered) {
@@ -212,13 +217,77 @@ export function DiligenceShell({
       arr.push(i);
       byCat.set(i.category, arr);
     }
-    return DILIGENCE_CATEGORIES.filter((c) => byCat.has(c.key)).map((c) => ({
-      key: c.key,
-      label: c.label,
-      blurb: c.blurb,
-      items: byCat.get(c.key)!,
-    }));
-  }, [filtered]);
+    return DILIGENCE_CATEGORIES.filter((c) => byCat.has(c.key)).map((c) => {
+      const arr = byCat.get(c.key)!;
+      const approved = arr.filter((i) => i.status === "approved").length;
+      const waived = arr.filter((i) => WAIVE_STATES.includes(i.status)).length;
+      const submitted = arr.filter((i) => i.status === "submitted").length;
+      const overdue = arr.filter(
+        (i) =>
+          i.dueDate != null &&
+          i.dueDate < todayIso &&
+          i.status !== "approved" &&
+          !WAIVE_STATES.includes(i.status)
+      ).length;
+      return {
+        key: c.key,
+        label: c.label,
+        blurb: c.blurb,
+        items: arr,
+        total: arr.length,
+        // "Done" = terminal-satisfied (approved OR waived/na) — nothing left
+        // to chase in this category.
+        done: approved + waived,
+        submitted,
+        overdue,
+      };
+    });
+  }, [filtered, todayIso]);
+
+  // Collapsible category sections. Seed COLLAPSED with the fully-satisfied
+  // categories (every item approved/waived/na) so a fresh load isn't a wall of
+  // 80+ rows — the sections still needing attention stay open. Runs once from
+  // the initial items; the user's toggles win thereafter (realtime refreshes
+  // never reset their choices, and a newly-seen category defaults open).
+  const [collapsed, setCollapsed] = React.useState<Set<string>>(() => {
+    const byCat = new Map<string, DiligenceItem[]>();
+    for (const i of items) {
+      const arr = byCat.get(i.category) ?? [];
+      arr.push(i);
+      byCat.set(i.category, arr);
+    }
+    const done = new Set<string>();
+    for (const [key, arr] of byCat) {
+      if (
+        arr.length > 0 &&
+        arr.every(
+          (i) => i.status === "approved" || WAIVE_STATES.includes(i.status)
+        )
+      )
+        done.add(key);
+    }
+    return done;
+  });
+
+  // A search or any active filter force-EXPANDS every group so matches are
+  // never hidden behind a collapsed header (without mutating the user's set).
+  const filtersActive =
+    query.trim() !== "" ||
+    statusFilter !== ALL ||
+    categoryFilter !== ALL ||
+    assigneeFilter !== ALL ||
+    overdueOnly;
+
+  function toggleCategory(key: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+  const expandAll = () => setCollapsed(new Set());
+  const collapseAll = () => setCollapsed(new Set(groups.map((g) => g.key)));
 
   const selectedIds = Array.from(selected);
   const allVisibleSelected =
@@ -905,9 +974,28 @@ export function DiligenceShell({
           <AlertTriangle className="w-3.5 h-3.5" />
           Overdue
         </button>
-        <span className="text-[12px] text-nurock-slate-light ml-auto">
-          {filtered.length} of {items.length} items
-        </span>
+        <div className="ml-auto flex items-center gap-3">
+          {!filtersActive && groups.length > 0 && (
+            <div className="flex items-center gap-1.5 text-[11px]">
+              <button
+                onClick={expandAll}
+                className="text-nurock-slate-light hover:text-nurock-navy"
+              >
+                Expand all
+              </button>
+              <span className="text-nurock-border">·</span>
+              <button
+                onClick={collapseAll}
+                className="text-nurock-slate-light hover:text-nurock-navy"
+              >
+                Collapse all
+              </button>
+            </div>
+          )}
+          <span className="text-[12px] text-nurock-slate-light">
+            {filtered.length} of {items.length} items
+          </span>
+        </div>
       </div>
 
       {/* Bulk toolbar */}
@@ -987,19 +1075,75 @@ export function DiligenceShell({
               </tr>
             </thead>
             <tbody>
-              {groups.map((g) => (
+              {groups.map((g) => {
+                const isOpen = filtersActive || !collapsed.has(g.key);
+                const pct = g.total > 0 ? Math.round((g.done / g.total) * 100) : 0;
+                return (
                 <React.Fragment key={g.key}>
-                  <tr className="bg-nurock-gray/40 border-b border-nurock-border">
-                    <td colSpan={7} className="px-4 py-1.5">
-                      <span className="font-display text-[11px] uppercase tracking-[0.08em] text-nurock-navy font-semibold">
-                        {g.label}
-                      </span>
-                      <span className="text-[11px] text-nurock-slate-light ml-2">
-                        {g.blurb}
-                      </span>
+                  <tr className="bg-nurock-gray/40 border-y border-nurock-border">
+                    <td colSpan={7} className="p-0">
+                      {/* Collapsible category header — the whole bar toggles the
+                          section; the right-side roll-up keeps a collapsed
+                          category informative (done/total + bar, plus overdue /
+                          in-review counts). */}
+                      <button
+                        type="button"
+                        onClick={() => toggleCategory(g.key)}
+                        aria-expanded={isOpen}
+                        disabled={filtersActive}
+                        className="flex w-full items-center gap-2 px-4 py-2 text-left transition-colors hover:bg-nurock-gray/70 disabled:cursor-default disabled:hover:bg-transparent"
+                        title={
+                          filtersActive
+                            ? "Clear filters to collapse categories"
+                            : isOpen
+                              ? `Collapse ${g.label}`
+                              : `Expand ${g.label}`
+                        }
+                      >
+                        {isOpen ? (
+                          <ChevronDown className="w-3.5 h-3.5 shrink-0 text-nurock-slate" />
+                        ) : (
+                          <ChevronRight className="w-3.5 h-3.5 shrink-0 text-nurock-slate" />
+                        )}
+                        <span className="font-display text-[11px] uppercase tracking-[0.08em] text-nurock-navy font-semibold">
+                          {g.label}
+                        </span>
+                        <span className="hidden md:inline truncate text-[11px] text-nurock-slate-light">
+                          {g.blurb}
+                        </span>
+                        <span className="ml-auto flex items-center gap-2 shrink-0">
+                          {g.overdue > 0 && (
+                            <span className="rounded-full bg-[#FEF3F2] px-1.5 py-0.5 text-[10px] font-semibold text-[#B42318]">
+                              {g.overdue} overdue
+                            </span>
+                          )}
+                          {g.submitted > 0 && (
+                            <span className="rounded-full bg-[#FFFAEB] px-1.5 py-0.5 text-[10px] font-semibold text-[#B54708]">
+                              {g.submitted} in review
+                            </span>
+                          )}
+                          {g.done === g.total ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-[#ECFDF3] px-1.5 py-0.5 text-[10px] font-semibold text-[#027A48]">
+                              <CheckCircle2 className="w-3 h-3" /> Complete
+                            </span>
+                          ) : (
+                            <>
+                              <span className="tabular-nums text-[11px] text-nurock-slate">
+                                {g.done}/{g.total}
+                              </span>
+                              <span className="relative h-1.5 w-14 overflow-hidden rounded-full bg-[#F2F4F7]">
+                                <span
+                                  className="absolute inset-y-0 left-0 rounded-full bg-emerald-500"
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </span>
+                            </>
+                          )}
+                        </span>
+                      </button>
                     </td>
                   </tr>
-                  {g.items.map((i) => {
+                  {isOpen && g.items.map((i) => {
                     const overdue =
                       i.dueDate != null &&
                       i.dueDate < todayIso &&
@@ -1089,7 +1233,8 @@ export function DiligenceShell({
                     );
                   })}
                 </React.Fragment>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </Card>
