@@ -709,8 +709,9 @@ export function DiligenceShell({
             // closing; PIS at CO), so countdown-only chips read as a collapse
             // bug — the visible date makes identical countdowns self-evident.
             const short = (() => {
+              // Part A: 4-digit year (M/D/YYYY). Was m[1].slice(2) → 2-digit "26".
               const m = d.date.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-              return m ? `${Number(m[2])}/${Number(m[3])}/${m[1].slice(2)}` : d.date;
+              return m ? `${Number(m[2])}/${Number(m[3])}/${m[1]}` : d.date;
             })();
             return (
               <span
