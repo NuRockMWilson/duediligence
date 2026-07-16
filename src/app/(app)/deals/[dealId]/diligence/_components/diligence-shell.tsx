@@ -31,8 +31,9 @@ import {
   ChevronDown,
   ChevronRight,
   CheckCircle2,
+  FileText,
 } from "lucide-react";
-import { Card, KpiTile, Badge, CircularProgress } from "@/components/nurock-ui";
+import { Card, KpiTile, Badge, CircularProgress, FileIcon, type FileType } from "@/components/nurock-ui";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -57,7 +58,7 @@ import {
   categoryLabel,
   DILIGENCE_CATEGORIES,
 } from "@/lib/diligence/categories";
-import type { DiligenceChecklist, DiligenceItem } from "@/lib/data/diligence";
+import type { DiligenceChecklist, DiligenceItem, LibraryDoc } from "@/lib/data/diligence";
 import type {
   DiligenceStatus,
   FinancierCoverage,
@@ -112,6 +113,48 @@ const STATUS_BADGE_BY_TONE: Record<
   muted: "navy",
 };
 
+// ---------------------------------------------------------------------------
+// Document Vault helpers (pure) — file-type detection + size label.
+// mimeType is nullable and often "application/octet-stream", so branch on the
+// filename extension too (mirrors the drawer's fileTypeOf approach).
+// ---------------------------------------------------------------------------
+const DOC_IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "heic", "avif", "bmp", "svg"];
+
+function docDisplayName(d: LibraryDoc): string {
+  return d.displayName ?? d.originalFilename;
+}
+function docExt(d: LibraryDoc): string {
+  const n = d.originalFilename || d.displayName || "";
+  const i = n.lastIndexOf(".");
+  return i >= 0 && i < n.length - 1 ? n.slice(i + 1).toLowerCase() : "";
+}
+function isPdfDoc(d: LibraryDoc): boolean {
+  return d.mimeType === "application/pdf" || docExt(d) === "pdf";
+}
+function isImageDoc(d: LibraryDoc): boolean {
+  return (d.mimeType?.startsWith("image/") ?? false) || DOC_IMAGE_EXTS.includes(docExt(d));
+}
+/** Inline-previewable (PDF via iframe, image via img); everything else uses a
+ *  styled placeholder + download. */
+function isPreviewable(d: LibraryDoc): boolean {
+  return isPdfDoc(d) || isImageDoc(d);
+}
+function docIconType(d: LibraryDoc): FileType {
+  const ext = docExt(d);
+  const m = d.mimeType ?? "";
+  if (isPdfDoc(d)) return "pdf";
+  if (isImageDoc(d)) return "img";
+  if (ext === "csv" || m.includes("csv")) return "csv";
+  if (["xls", "xlsx"].includes(ext) || m.includes("spreadsheet") || m.includes("excel")) return "xls";
+  return "doc";
+}
+/** Preserves the shipped convention (Dil #10): sub-1KB files show "<1 KB". */
+function docSizeLabel(bytes: number | null): string {
+  if (bytes == null) return "—";
+  if (bytes < 1024) return "<1 KB";
+  return `${(bytes / 1024).toFixed(0)} KB`;
+}
+
 export function DiligenceShell({
   checklist,
   financiers,
@@ -142,6 +185,18 @@ export function DiligenceShell({
   const [includeDocs, setIncludeDocs] = React.useState(true);
   const [exporting, setExporting] = React.useState(false);
   const [exportingFinancierId, setExportingFinancierId] = React.useState<string | null>(null);
+  // Document Vault (split-pane) — selected file + its live preview URL.
+  const [selectedDocId, setSelectedDocId] = React.useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = React.useState(false);
+  const [previewError, setPreviewError] = React.useState<string | null>(null);
+  const [downloadingDocId, setDownloadingDocId] = React.useState<string | null>(null);
+  // Guards against a stale signed-URL resolving after a newer selection.
+  const previewReqRef = React.useRef(0);
+  const selectedDoc = React.useMemo(
+    () => library.find((d) => d.id === selectedDocId) ?? null,
+    [library, selectedDocId],
+  );
   // Part 2 — Create/Import surfaced on the main page (not just Settings).
   const [createOpen, setCreateOpen] = React.useState(false);
   const [importOpen, setImportOpen] = React.useState(false);
@@ -422,6 +477,63 @@ export function DiligenceShell({
       return;
     }
     window.open(res.signedUrl, "_blank", "noopener");
+  }
+
+  // Document Vault — select a file for the right-pane preview. Only fetches a
+  // live signed URL for inline-previewable types (PDF / image); others render a
+  // styled placeholder. A request token guards against a slow URL landing after
+  // a newer selection (signed URLs also expire, so we re-fetch on every select).
+  async function selectDoc(d: LibraryDoc) {
+    const token = ++previewReqRef.current;
+    setSelectedDocId(d.id);
+    setPreviewUrl(null);
+    setPreviewError(null);
+    if (!isPreviewable(d)) {
+      setPreviewLoading(false);
+      return;
+    }
+    setPreviewLoading(true);
+    try {
+      const res = await getDiligenceDocSignedUrl({ filePath: d.filePath });
+      if (token !== previewReqRef.current) return; // superseded by a newer select
+      if (res.error || !res.signedUrl) {
+        setPreviewError(res.error ?? "Could not load preview");
+      } else {
+        setPreviewUrl(res.signedUrl);
+      }
+    } catch {
+      if (token === previewReqRef.current) setPreviewError("Could not load preview");
+    } finally {
+      if (token === previewReqRef.current) setPreviewLoading(false);
+    }
+  }
+
+  // Force a real download (signed URL is cross-origin, so the anchor `download`
+  // hint alone won't stick — fetch to a blob, then save).
+  async function downloadDoc(d: LibraryDoc) {
+    setDownloadingDocId(d.id);
+    try {
+      const res = await getDiligenceDocSignedUrl({ filePath: d.filePath });
+      if (res.error || !res.signedUrl) {
+        toast.error(res.error ?? "Could not download file");
+        return;
+      }
+      const resp = await fetch(res.signedUrl);
+      if (!resp.ok) throw new Error(`Download failed (${resp.status})`);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = docDisplayName(d);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Download failed");
+    } finally {
+      setDownloadingDocId(null);
+    }
   }
 
   function adoptPacket(templateId: string) {
@@ -844,8 +956,9 @@ export function DiligenceShell({
         </div>
       )}
 
-      {/* Part 2 — shared per-deal document library. Any uploaded document can
-          be linked to any number of items (link from an item's drawer). */}
+      {/* Part 2 — shared per-deal document library, presented as a Split-Pane
+          Document Vault: left = file explorer (click to preview), right =
+          preview pane. Linking still happens from an item's drawer. */}
       <div>
         <div className="flex items-center justify-between mb-2 gap-3">
           <h2 className="font-display text-sm uppercase tracking-wider text-nurock-slate">
@@ -862,67 +975,174 @@ export function DiligenceShell({
             re-uploading.
           </Card>
         ) : (
-          <Card className="p-0 overflow-hidden">
-            <div className="max-h-[280px] overflow-y-auto">
-              <table className="w-full text-[12.5px]">
-                <thead className="sticky top-0 bg-white">
-                  <tr className="text-left text-[10.5px] uppercase tracking-wider text-nurock-slate-light border-b border-nurock-border">
-                    <th className="px-4 py-2 font-medium">Document</th>
-                    <th className="px-3 py-2 font-medium w-[90px]">Size</th>
-                    <th className="px-3 py-2 font-medium w-[130px]">Linked to</th>
-                    <th className="px-3 py-2 w-[60px]" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {library.map((d) => {
-                    const linkedTitles = d.linkedItemIds
-                      .map((id) => itemTitleById.get(id))
-                      .filter(Boolean) as string[];
-                    return (
-                      <tr
-                        key={d.id}
-                        className="border-b border-nurock-border/60 last:border-b-0"
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-12rem)]">
+            {/* Left rail — file explorer */}
+            <Card className="p-0 overflow-hidden lg:col-span-1 flex flex-col">
+              <div className="px-4 py-2 border-b border-nurock-border text-[10.5px] uppercase tracking-wider text-nurock-slate-light font-medium">
+                {library.length} document{library.length === 1 ? "" : "s"}
+              </div>
+              <ul className="flex-1 overflow-y-auto divide-y divide-nurock-border/60">
+                {library.map((d) => {
+                  const linkedTitles = d.linkedItemIds
+                    .map((id) => itemTitleById.get(id))
+                    .filter(Boolean) as string[];
+                  const active = d.id === selectedDocId;
+                  return (
+                    <li key={d.id}>
+                      <button
+                        type="button"
+                        onClick={() => selectDoc(d)}
+                        aria-current={active ? "true" : undefined}
+                        className={`w-full text-left px-4 py-2.5 flex items-start gap-2.5 border-l-2 transition-colors ${
+                          active
+                            ? "bg-nurock-tan/10 border-nurock-tan"
+                            : "border-transparent hover:bg-nurock-offwhite"
+                        }`}
                       >
-                        <td className="px-4 py-2">
-                          <span className="inline-flex items-center gap-2 min-w-0">
-                            <Paperclip className="w-3.5 h-3.5 text-nurock-slate-light shrink-0" />
-                            <span className="truncate text-nurock-black">
-                              {d.displayName ?? d.originalFilename}
-                            </span>
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-nurock-slate-light whitespace-nowrap">
-                          {d.byteSize == null
-                            ? "—"
-                            : d.byteSize < 1024
-                              ? "<1 KB"
-                              : `${(d.byteSize / 1024).toFixed(0)} KB`}
-                        </td>
-                        <td className="px-3 py-2">
+                        <FileIcon type={docIconType(d)} />
+                        <span className="min-w-0 flex-1">
                           <span
-                            className="text-nurock-slate cursor-default"
+                            className="block truncate text-[12.5px] text-nurock-black"
+                            title={docDisplayName(d)}
+                          >
+                            {docDisplayName(d)}
+                          </span>
+                          <span
+                            className="block text-[11px] text-nurock-slate-light"
                             title={linkedTitles.join("\n") || undefined}
                           >
-                            {d.linkedItemIds.length}{" "}
+                            {docSizeLabel(d.byteSize)} · {d.linkedItemIds.length}{" "}
                             {d.linkedItemIds.length === 1 ? "item" : "items"}
                           </span>
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          <button
-                            onClick={() => onViewLibraryDoc(d.filePath)}
-                            className="text-nurock-navy hover:text-nurock-navy-dark"
-                            title="Open document"
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </Card>
+
+            {/* Right rail — preview pane */}
+            <Card className="p-0 overflow-hidden lg:col-span-2 flex flex-col">
+              {!selectedDoc ? (
+                <div className="flex-1 p-6">
+                  <div className="h-full min-h-[240px] rounded-lg border-2 border-dashed border-nurock-border flex flex-col items-center justify-center gap-3 text-center">
+                    <FileText className="w-10 h-10 text-nurock-slate-light opacity-50" />
+                    <div className="text-sm font-medium text-nurock-slate">
+                      Select a document to preview
+                    </div>
+                    <div className="text-[12px] text-nurock-slate-light">
+                      Choose a file from the library on the left.
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Header — name + Download */}
+                  <div className="px-4 py-3 border-b border-nurock-border flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <FileIcon type={docIconType(selectedDoc)} />
+                      <div className="min-w-0">
+                        <div
+                          className="truncate font-display text-[13px] text-nurock-black"
+                          title={docDisplayName(selectedDoc)}
+                        >
+                          {docDisplayName(selectedDoc)}
+                        </div>
+                        <div className="text-[11px] text-nurock-slate-light">
+                          {docSizeLabel(selectedDoc.byteSize)}
+                          {selectedDoc.mimeType ? ` · ${selectedDoc.mimeType}` : ""}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8"
+                        onClick={() => onViewLibraryDoc(selectedDoc.filePath)}
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 mr-1" /> Open
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-8 bg-nurock-navy hover:bg-nurock-navy-dark text-white"
+                        onClick={() => downloadDoc(selectedDoc)}
+                        disabled={downloadingDocId === selectedDoc.id}
+                      >
+                        {downloadingDocId === selectedDoc.id ? (
+                          <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                        ) : (
+                          <Download className="w-3.5 h-3.5 mr-1" />
+                        )}
+                        Download File
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Viewer */}
+                  <div className="flex-1 overflow-hidden bg-nurock-offwhite">
+                    {previewLoading ? (
+                      <div className="h-full flex items-center justify-center text-[12px] text-nurock-slate-light">
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Loading preview…
+                      </div>
+                    ) : previewError ? (
+                      <div className="h-full flex flex-col items-center justify-center gap-2 px-6 text-center">
+                        <AlertTriangle className="w-6 h-6 text-red-500" />
+                        <div className="text-[12px] text-red-600">{previewError}</div>
+                        <Button variant="outline" size="sm" onClick={() => selectDoc(selectedDoc)}>
+                          Retry
+                        </Button>
+                      </div>
+                    ) : previewUrl && isPdfDoc(selectedDoc) ? (
+                      <iframe
+                        src={previewUrl}
+                        title={`Preview — ${docDisplayName(selectedDoc)}`}
+                        className="w-full h-full border-0"
+                      />
+                    ) : previewUrl && isImageDoc(selectedDoc) ? (
+                      <div className="h-full overflow-auto flex items-center justify-center p-4">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={previewUrl}
+                          alt={docDisplayName(selectedDoc)}
+                          className="max-w-full max-h-full object-contain"
+                        />
+                      </div>
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
+                        <FileIcon type={docIconType(selectedDoc)} />
+                        <div className="text-sm font-medium text-nurock-slate">
+                          Inline preview isn&apos;t available for this file type
+                        </div>
+                        <div className="text-[12px] text-nurock-slate-light">
+                          {docExt(selectedDoc) ? `.${docExt(selectedDoc)} files` : "These files"}{" "}
+                          open in a new tab or download.
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => onViewLibraryDoc(selectedDoc.filePath)}
                           >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </Card>
+                            <ExternalLink className="w-3.5 h-3.5 mr-1" /> Open
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="bg-nurock-navy hover:bg-nurock-navy-dark text-white"
+                            onClick={() => downloadDoc(selectedDoc)}
+                            disabled={downloadingDocId === selectedDoc.id}
+                          >
+                            <Download className="w-3.5 h-3.5 mr-1" /> Download File
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </Card>
+          </div>
         )}
       </div>
 
