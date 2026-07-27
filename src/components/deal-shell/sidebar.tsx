@@ -72,7 +72,7 @@ export default function DealSidebar({ dealId }: { dealId: string }) {
   }, [groups, pathname]);
 
   return (
-    <SidebarShell collapsed={collapsed}>
+    <SidebarShell collapsed={collapsed} className="no-print">
       <SidebarNav
         sections={sections}
         activeId={activeId}

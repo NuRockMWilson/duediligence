@@ -163,3 +163,15 @@ h1, h2, h3, h4, h5, h6,
   font-weight: 500;
   letter-spacing: 0.01em;
 }
+
+/* Print: drop anything explicitly marked as screen-only chrome — today the navy
+   nav rail, which otherwise prints as a 220px navy bar down the left edge.
+   Deliberately minimal: Underwriting also hides header/nav/footer wholesale for
+   its branded IC memo output, but this app has no such print deliverable, so
+   only the opt-in class is honored here rather than restyling all print output.
+   Adding the class without this rule is a no-op, which is what it was before. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}
