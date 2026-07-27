@@ -94,3 +94,55 @@ export function initialCollapsedSections(
 ): Set<string> {
   return defaultExpanded ? new Set<string>() : new Set(sections.map((s) => s.id));
 }
+
+// ---------------------------------------------------------------------------
+// Rail width (expanded 220px vs icon-only 56px)
+// ---------------------------------------------------------------------------
+
+/**
+ * Viewport width below which the rail starts COLLAPSED on a first visit.
+ *
+ * Measured on the Underwriting Pro Forma (404px of sticky label columns + 100px
+ * year columns): the expanded rail costs 3 year columns at 1280px and 2 at
+ * 1440px, but nothing at 1900px+ where the tables have room to spare. 1500px is
+ * the line where the rail stops being an eviction.
+ */
+export const RAIL_AUTO_COLLAPSE_BELOW_PX = 1500;
+
+/** Rail widths in px. Applied as inline styles, not Tailwind arbitrary values —
+ *  see the comment in SidebarShell for why (a generated file must not depend on
+ *  each consumer's tailwind `content` globs to lay out correctly). */
+export const RAIL_EXPANDED_PX = 220;
+export const RAIL_COLLAPSED_PX = 56;
+
+/** localStorage key holding the rail's expanded/collapsed choice for a module. */
+export function sidebarRailStorageKey(namespace: string): string {
+  return `${namespace}:sidebar-rail-collapsed`;
+}
+
+/**
+ * Rail state for a mount.
+ *
+ * A stored value ALWAYS wins — that is the whole point of persisting it, and it
+ * is why this reads the raw string rather than coercing: `"false"` is a user who
+ * deliberately expanded a narrow window and must not be re-collapsed.
+ *
+ * Width only seeds a FIRST visit. Deliberately not wired to a resize listener:
+ * re-collapsing mid-session because a window crossed the threshold fights the
+ * person driving the window. (`useBreakpoint`-driven state did exactly that.)
+ */
+export function initialRailCollapsed({
+  stored,
+  viewportWidth,
+  breakpointPx = RAIL_AUTO_COLLAPSE_BELOW_PX,
+}: {
+  stored: string | null;
+  viewportWidth: number;
+  breakpointPx?: number;
+}): boolean {
+  if (stored === "true") return true;
+  if (stored === "false") return false;
+  // No saved choice: narrow viewports start as the icon rail. viewportWidth is
+  // 0 during SSR, which must not read as "very narrow".
+  return viewportWidth > 0 && viewportWidth < breakpointPx;
+}

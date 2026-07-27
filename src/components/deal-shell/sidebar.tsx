@@ -5,7 +5,8 @@
 // -----------------------------------------------------------------------------
 // Was a WHITE rail (bg-white / border-nurock-border / slate links); now the
 // same navy rail as Development and Underwriting, by rendering the shared
-// components/shared-ui/SidebarNav.tsx (canonical copy lives in nurock-devmgmt).
+// components/shared-ui/SidebarNav.tsx (generated — the canonical source is
+// the standalone shared-ui repo; see docs/nav.md).
 // Only module-specific wiring stays here: the nav config, route-based active
 // state, and the cross-app header block + rail collapse toggle.
 //
@@ -26,6 +27,7 @@ import { buildNav } from "@/lib/nav";
 import {
   SidebarNav,
   SidebarShell,
+  useRailCollapsed,
   type SidebarSectionDef,
 } from "@/components/shared-ui/SidebarNav";
 
@@ -33,9 +35,10 @@ export default function DealSidebar({ dealId }: { dealId: string }) {
   const pathname = usePathname();
   const groups = buildNav(dealId);
 
-  // Rail collapse — same affordance as the other modules. Diligence has no
-  // breakpoint hook, so desktop simply defaults to expanded.
-  const [collapsed, setCollapsed] = React.useState(false);
+  // Rail collapse — same affordance, and now the same persistence, as the other
+  // modules: the choice is saved, and a FIRST visit under 1500px starts as the
+  // icon rail. Deliberately not resize-driven (see useRailCollapsed).
+  const [collapsed, setCollapsed] = useRailCollapsed("nurock-diligence");
 
   const sections: SidebarSectionDef[] = React.useMemo(
     () =>
@@ -85,7 +88,7 @@ export default function DealSidebar({ dealId }: { dealId: string }) {
             >
               <button
                 type="button"
-                onClick={() => setCollapsed((c) => !c)}
+                onClick={() => setCollapsed(!collapsed)}
                 className="text-white/50 hover:text-white p-1 rounded hover:bg-white/10 transition-colors"
                 title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
                 aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}

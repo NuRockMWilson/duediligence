@@ -46,6 +46,11 @@ import {
   sidebarItemClasses,
   sidebarStorageKey,
   initialCollapsedSections,
+  sidebarRailStorageKey,
+  initialRailCollapsed,
+  RAIL_AUTO_COLLAPSE_BELOW_PX,
+  RAIL_EXPANDED_PX,
+  RAIL_COLLAPSED_PX,
   type SidebarBadge,
   type SidebarItemDef,
   type SidebarSectionDef,
@@ -56,8 +61,60 @@ export {
   sidebarItemClasses,
   sidebarStorageKey,
   initialCollapsedSections,
+  sidebarRailStorageKey,
+  initialRailCollapsed,
+  RAIL_AUTO_COLLAPSE_BELOW_PX,
+  RAIL_EXPANDED_PX,
+  RAIL_COLLAPSED_PX,
 };
 export type { SidebarBadge, SidebarItemDef, SidebarSectionDef };
+
+/**
+ * Rail collapse state, persisted per module.
+ *
+ * First visit only, the viewport seeds it: under 1500px the rail costs the wide
+ * tables 2-3 columns, so it starts as the icon rail. Every visit after that the
+ * saved choice wins, and there is deliberately NO resize listener — a rail that
+ * re-collapses when you drag a window edge fights the person dragging it.
+ *
+ * SSR renders expanded and the effect corrects on mount, which keeps the server
+ * and client markup identical (no hydration mismatch on a width-derived value).
+ */
+export function useRailCollapsed(
+  storageNamespace: string,
+): [boolean, (next: boolean) => void] {
+  const key = sidebarRailStorageKey(storageNamespace);
+  const [collapsed, setCollapsed] = React.useState(false);
+
+  React.useEffect(() => {
+    try {
+      setCollapsed(
+        initialRailCollapsed({
+          stored: window.localStorage.getItem(key),
+          viewportWidth: window.innerWidth,
+        }),
+      );
+    } catch {
+      /* private mode / storage disabled — the width-independent default stands */
+    }
+  }, [key]);
+
+  // Only an explicit toggle persists. An auto-seeded default stays unsaved so a
+  // laptop-then-monitor user isn't locked to whichever screen they opened first.
+  const set = React.useCallback(
+    (next: boolean) => {
+      setCollapsed(next);
+      try {
+        window.localStorage.setItem(key, next ? "true" : "false");
+      } catch {
+        /* ignore */
+      }
+    },
+    [key],
+  );
+
+  return [collapsed, set];
+}
 
 export interface SidebarNavProps {
   sections: SidebarSectionDef[];
@@ -309,11 +366,25 @@ export function SidebarShell({
     //     max-height the tail of the rail would be unreachable. Scrolling lives
     //     here rather than on the <aside> so the painted navy isn't clipped to
     //     the scroll viewport's height.
+    // The rail width is an INLINE STYLE, not a w-[220px]/w-[56px] utility pair.
+    // Two reasons, both learned the hard way:
+    //   1. Measured: with the utility classes the collapsed rail still laid out
+    //      at 220px in Underwriting's deal view. Same class on a plain <div>
+    //      computed 56px, min-width:0 didn't change it, and an explicit
+    //      flex-basis did — i.e. the utility was not winning on this element, so
+    //      the collapse toggle silently reclaimed nothing.
+    //   2. This file is GENERATED into three repos. An arbitrary-value class
+    //      only exists if each app's tailwind.config `content` globs happen to
+    //      scan the generated path; a width that renders correctly must not
+    //      depend on per-repo build config. flexBasis is set alongside width so
+    //      the flex main-size algorithm can't fall back to a content measure.
     <aside
-      className={`hidden md:block ${
-        collapsed ? "w-[56px]" : "w-[220px]"
-      } shrink-0 bg-nurock-navy border-r border-white/10 transition-[width] duration-200 ${className}`}
-      style={{ minHeight: `calc(100vh - ${headerOffsetPx}px)` }}
+      className={`hidden md:block shrink-0 bg-nurock-navy border-r border-white/10 transition-[width] duration-200 ${className}`}
+      style={{
+        width: collapsed ? RAIL_COLLAPSED_PX : RAIL_EXPANDED_PX,
+        flexBasis: collapsed ? RAIL_COLLAPSED_PX : RAIL_EXPANDED_PX,
+        minHeight: `calc(100vh - ${headerOffsetPx}px)`,
+      }}
     >
       <div
         className="sticky self-start overflow-y-auto overflow-x-hidden py-4"

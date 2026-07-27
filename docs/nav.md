@@ -26,3 +26,11 @@ group to `buildNav()` and it renders as a new section.
 - Header offset is the shared 88px default.
 - Diligence currently has a single nav item, so the rail is intentionally sparse —
   adding sections later is a config change only.
+- The shell row keeps its `flex max-w-[1600px] mx-auto` container — the same one
+  the header uses, which is what puts the rail's left edge on the logo's (x=472
+  in a 2560px window). Development now matches this. Underwriting's deal view
+  aligns the other way, at x=0, because its Pro Forma is 2404px wide and the cap
+  costs it year columns.
+- The rail starts as the 56px icon rail on a first visit under 1500px and
+  expanded at 1500px+; a saved choice wins afterwards, and it never re-collapses
+  on resize.

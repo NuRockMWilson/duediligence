@@ -40,14 +40,17 @@ for (const rel of GENERATED) {
   if (!existsSync(hashPath)) {
     console.error(
       `✗ missing hash sidecar: ${rel}.sha256 — re-run the canonical sync ` +
-        `(nurock-devmgmt: npm run sync:shared-ui)`
+        `(shared-ui repo: node scripts/sync-shared-ui.mjs)`
     );
     failed++;
     continue;
   }
 
+  // LF-normalized before hashing: git stores LF and checks out CRLF on
+  // Windows, so hashing raw bytes makes this gate platform-dependent and fails
+  // a Linux (Vercel) build on a file that is byte-identical after normalizing.
   const actual = createHash("sha256")
-    .update(readFileSync(filePath, "utf8"), "utf8")
+    .update(readFileSync(filePath, "utf8").split("\r\n").join("\n"), "utf8")
     .digest("hex");
   const expected = readFileSync(hashPath, "utf8").trim();
 
