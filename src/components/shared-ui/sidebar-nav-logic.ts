@@ -96,6 +96,33 @@ export function initialCollapsedSections(
 }
 
 // ---------------------------------------------------------------------------
+// Header height — published by the header, consumed by anything that sticks
+// below it. NO module should name a pixel offset.
+// ---------------------------------------------------------------------------
+
+/**
+ * CSS custom property carrying the app header's MEASURED height, set on
+ * :root by the header component itself (see useHeaderHeightVar).
+ *
+ * Why a measured variable rather than a constant: the three apps hardcoded
+ * their own offsets and both were wrong, in opposite directions. Underwriting
+ * used `top: 122px` against a 121.33px header, leaving a hairline of page
+ * showing through above the rail; Development and Diligence used `top: 88px`
+ * against an 88.67px header, so the rail tucked 0.67px UNDER it. Sub-pixel
+ * header heights are unavoidable once rows are sized by content
+ * (33.33 + 44 + 44 = 121.33), so the offset has to be measured, not typed.
+ */
+export const HEADER_HEIGHT_VAR = "--app-header-h";
+
+/**
+ * `var(--app-header-h, <fallback>px)` — the fallback covers SSR and the first
+ * paint before the ResizeObserver runs, so the rail is never wildly misplaced.
+ */
+export function headerHeightCss(fallbackPx: number): string {
+  return `var(${HEADER_HEIGHT_VAR}, ${fallbackPx}px)`;
+}
+
+// ---------------------------------------------------------------------------
 // Rail width (expanded 220px vs icon-only 56px)
 // ---------------------------------------------------------------------------
 

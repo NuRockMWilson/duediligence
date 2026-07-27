@@ -51,6 +51,8 @@ import {
   RAIL_AUTO_COLLAPSE_BELOW_PX,
   RAIL_EXPANDED_PX,
   RAIL_COLLAPSED_PX,
+  HEADER_HEIGHT_VAR,
+  headerHeightCss,
   type SidebarBadge,
   type SidebarItemDef,
   type SidebarSectionDef,
@@ -66,8 +68,45 @@ export {
   RAIL_AUTO_COLLAPSE_BELOW_PX,
   RAIL_EXPANDED_PX,
   RAIL_COLLAPSED_PX,
+  HEADER_HEIGHT_VAR,
+  headerHeightCss,
 };
 export type { SidebarBadge, SidebarItemDef, SidebarSectionDef };
+
+/**
+ * Publish the header's MEASURED height as --app-header-h on :root.
+ *
+ * Call this from the app's header component with a ref on its outermost
+ * <header>. Everything that sticks below the header then derives its offset
+ * from the variable instead of hardcoding a number that drifts (all three apps
+ * had a wrong one — see HEADER_HEIGHT_VAR).
+ *
+ * ResizeObserver rather than a one-shot measure: the header's height changes
+ * when rows wrap, when a row is hidden below `md`, and when fonts finish
+ * loading. The value is deliberately NOT cleared on unmount — keeping the last
+ * known height avoids a one-frame jump during route transitions.
+ */
+export function useHeaderHeightVar(
+  ref: React.RefObject<HTMLElement | null>,
+): void {
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const publish = () => {
+      const h = el.getBoundingClientRect().height;
+      if (h > 0) {
+        document.documentElement.style.setProperty(
+          HEADER_HEIGHT_VAR,
+          `${h}px`,
+        );
+      }
+    };
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+}
 
 /**
  * Rail collapse state, persisted per module.
@@ -383,14 +422,15 @@ export function SidebarShell({
       style={{
         width: collapsed ? RAIL_COLLAPSED_PX : RAIL_EXPANDED_PX,
         flexBasis: collapsed ? RAIL_COLLAPSED_PX : RAIL_EXPANDED_PX,
-        minHeight: `calc(100vh - ${headerOffsetPx}px)`,
+        minHeight: `calc(100vh - ${headerHeightCss(headerOffsetPx)})`,
       }}
     >
       <div
         className="sticky self-start overflow-y-auto overflow-x-hidden py-4"
         style={{
-          top: `${headerOffsetPx}px`,
-          maxHeight: `calc(100vh - ${headerOffsetPx}px)`,
+          // Derived from the header's measured height, never a typed number.
+          top: headerHeightCss(headerOffsetPx),
+          maxHeight: `calc(100vh - ${headerHeightCss(headerOffsetPx)})`,
         }}
       >
         {children}

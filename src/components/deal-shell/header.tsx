@@ -1,5 +1,8 @@
 "use client";
 
+import * as React from "react";
+import { useHeaderHeightVar } from "@/components/shared-ui/SidebarNav";
+
 // =============================================================================
 // DealHeader — 2-row navy bar, contract-matched to nurock-underwriting
 // =============================================================================
@@ -71,9 +74,18 @@ export default function DealHeader({
   savedAt,
   notificationsBell,
 }: DealHeaderProps) {
+  const headerRef = React.useRef<HTMLElement>(null);
+  useHeaderHeightVar(headerRef);
+
 
   return (
-    <header className="bg-nurock-navy text-white shadow-lg sticky top-0 z-50">
+    // Publishes this header's MEASURED height as --app-header-h; the nav rail
+    // derives its sticky offset from it. The old hardcoded 88px was 0.67px
+    // SHORT of the real 88.67px header, so the rail tucked under it.
+    <header
+      ref={headerRef}
+      className="bg-nurock-navy text-white shadow-lg sticky top-0 z-50"
+    >
       {/* ============================================================
           ROW 1 — Identity (mirror of UW Header.tsx row 1)
           ============================================================ */}
@@ -82,7 +94,7 @@ export default function DealHeader({
             ("max-w-[1600px] mx-auto px-5", see nurock-devmgmt/docs/shell.md §1):
             same max-width AND same flat padding, so the logo's absolute X
             never shifts when switching modules. */}
-        <div className="max-w-[1600px] mx-auto px-5 flex items-center justify-between gap-4 min-h-[44px]">
+        <div className="px-5 flex items-center justify-between gap-4 min-h-[44px]">
           <div className="flex items-center gap-3 min-w-0">
             {/* P1: logo → HOME = the Underwriting portfolio dashboard. Cross-
                 deployment, so an ABSOLUTE URL via a plain anchor (not next/link).
@@ -107,7 +119,7 @@ export default function DealHeader({
                 NuRock
               </div>
               <div className="text-[10px] text-white/60 tracking-wide leading-tight">
-                Development Platform
+                Diligence Platform
               </div>
             </div>
 
@@ -153,7 +165,7 @@ export default function DealHeader({
           visible, full single line) + module vitals (md+) + tools (md+).
           ============================================================ */}
       {/* Row 2 shares the identical container bounds (shell.md §1). */}
-      <div className="hidden md:flex max-w-[1600px] mx-auto px-5 items-center justify-between gap-3 min-h-[44px]">
+      <div className="hidden md:flex px-5 items-center justify-between gap-3 min-h-[44px]">
         {/* Left — module vitals (KPI chips). The deal switcher moved UP to row 1
             to match the underwriting model; row 2 now carries vitals + tools. */}
         <div className="flex items-center gap-3 min-w-0">
