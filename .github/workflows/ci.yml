@@ -1,0 +1,50 @@
+name: CI
+
+# Makes the shared-UI drift gate and type-check available as REQUIRED status
+# checks on pull requests. Until now the drift check only ran inside
+# `npm run build`, which fails a Vercel deployment but does not block a merge —
+# a build step, not a merge gate.
+#
+# Branch protection (marking these Required) is a repo setting, not something
+# this file can do.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The shared-UI hash gate compares file content against committed
+          # .sha256 sidecars. Git's autocrlf must NOT rewrite line endings on
+          # checkout or the hashes would depend on the runner's platform. The
+          # gate itself LF-normalizes before hashing (that bug already bit us:
+          # committed hashes matched neither the LF nor the CRLF form of the
+          # committed blob), but pinning the checkout keeps the two independent.
+          persist-credentials: false
+
+      - name: Normalize line endings on checkout
+        run: git config --global core.autocrlf false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # 1. Shared-UI drift: the generated sidebar copies must match their
+      #    committed hashes. Fails on a hand-edit that bypassed the canonical
+      #    source + sync.
+      - name: Shared-UI drift gate
+        run: node scripts/check-shared-ui.mjs
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      # No vitest suite in this repo yet; tsc + the drift gate are the checks.
