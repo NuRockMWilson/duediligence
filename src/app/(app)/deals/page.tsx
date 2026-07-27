@@ -51,7 +51,7 @@ export default async function DealsPage() {
     <div className="min-h-screen bg-[#F7F8FA]">
       {/* Simple top header — just branding + user, no module switcher */}
       <header className="bg-nurock-navy text-white shadow-lg sticky top-0 z-50">
-        <div className="max-w-[1600px] mx-auto px-5 py-2.5 flex items-center justify-between gap-4 min-h-[56px]">
+        <div className="max-w-[1600px] mx-auto px-5 flex items-center justify-between gap-4 min-h-[44px]">
           <div className="flex items-center gap-3">
             <Logo className="h-9 w-auto" />
             <div>
