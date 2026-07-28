@@ -37,6 +37,6 @@ group to `buildNav()` and it renders as a new section.
   `@media print { .no-print { display:none } }` in `globals.css`. Underwriting's
   full chrome-hiding print block is NOT ported here - no branded print deliverable.
   CFO decision, 2026-07-27.
-- The rail starts as the 56px icon rail on a first visit under 1500px and
-  expanded at 1500px+; a saved choice wins afterwards, and it never re-collapses
+- The rail starts as the 56px icon rail on a first visit under 1400px and
+  expanded at 1400px+; a saved choice wins afterwards, and it never re-collapses
   on resize.

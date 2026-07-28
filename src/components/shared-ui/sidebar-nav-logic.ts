@@ -129,12 +129,24 @@ export function headerHeightCss(fallbackPx: number): string {
 /**
  * Viewport width below which the rail starts COLLAPSED on a first visit.
  *
- * Measured on the Underwriting Pro Forma (404px of sticky label columns + 100px
- * year columns): the expanded rail costs 3 year columns at 1280px and 2 at
- * 1440px, but nothing at 1900px+ where the tables have room to spare. 1500px is
- * the line where the rail stops being an eviction.
+ * 1400, lowered from 1500. Measured live at innerWidth 1440 in all three
+ * modules — there is NO measured layout cost to an expanded rail at that width:
+ *   • Underwriting: the Pro Forma needs 2406px and gets ~1330px with a 56px
+ *     rail vs ~1166px with a 220px rail. It scrolls horizontally at every
+ *     realistic viewport either way, so collapsing the rail does not avoid the
+ *     scroll — it only shifts the start point by roughly 1.5 year-columns.
+ *   • Development: the deal dashboard has no tables and no horizontal
+ *     scrollers.
+ *   • Diligence: the widest table is FLUID, not fixed-minimum. With the rail
+ *     expanded it renders 1139px inside a 1205px container, scrollWidth ===
+ *     clientWidth, zero overflowing elements.
+ *
+ * Net: 1440 (the common laptop width) now starts EXPANDED, which serves the
+ * original goal — users shouldn't have to guess which section a tab lives in.
+ *
+ * ONE rule for all three modules — never branch this per module.
  */
-export const RAIL_AUTO_COLLAPSE_BELOW_PX = 1500;
+export const RAIL_AUTO_COLLAPSE_BELOW_PX = 1400;
 
 /** Rail widths in px. Applied as inline styles, not Tailwind arbitrary values —
  *  see the comment in SidebarShell for why (a generated file must not depend on
