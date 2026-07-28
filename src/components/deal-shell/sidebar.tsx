@@ -72,7 +72,11 @@ export default function DealSidebar({ dealId }: { dealId: string }) {
   }, [groups, pathname]);
 
   return (
-    <SidebarShell collapsed={collapsed} className="no-print">
+    // TODO(shared-ui): replace with APP_HEADER_H_FALLBACK_PX once shared-ui
+    //                  has a remote — see Part 7. 89 is explicit here (not
+    //                  the component default) so all three rails carry the
+    //                  identical literal.
+    <SidebarShell collapsed={collapsed} headerOffsetPx={89} className="no-print">
       <SidebarNav
         sections={sections}
         activeId={activeId}

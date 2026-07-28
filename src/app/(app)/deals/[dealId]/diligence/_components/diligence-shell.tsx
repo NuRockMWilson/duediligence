@@ -631,7 +631,15 @@ export function DiligenceShell({
   const ringTone = RING_TONE[coverageTone(rollup.coveragePct)];
 
   return (
-    <div className="px-8 py-6 space-y-6 max-w-[1400px]">
+    // TODO(shared-ui): replace with SHELL_CONTENT_MAX_W once shared-ui has a
+    //                  remote — see Part 7
+    // 1600 (was 1400) + mx-auto (was MISSING, so this surface left-aligned
+    // while all five other capped surfaces centered). Free change: measured at
+    // 1440 with the rail expanded to 220px, this surface's content box is
+    // 1205px and its widest table 1139px with scrollWidth === clientWidth and
+    // zero overflowing elements — nothing here wants more than ~1150px, so the
+    // cap only bites above ~1500px, where it now matches its siblings.
+    <div className="px-8 py-6 space-y-6 mx-auto w-full max-w-[1600px]">
       {/* Header */}
       <div className="flex items-baseline justify-between">
         <div className="flex items-center gap-3">

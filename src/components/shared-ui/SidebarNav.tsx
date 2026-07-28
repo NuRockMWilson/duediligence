@@ -111,15 +111,21 @@ export function useHeaderHeightVar(
     //    the border box only — padding, a border, a row's vertical padding
     //    shifting at a breakpoint.
     //
-    // 2. window resize — the DURABLE one. The header's height changes almost
-    //    exclusively because the identity row WRAPS at narrow widths (measured
-    //    45px -> 53px on a long deal name), and wrapping is a function of
-    //    viewport width, so a resize listener covers the real-world case
-    //    directly. It also keeps this working where ResizeObserver callbacks
-    //    are throttled or never delivered — which is not hypothetical: in an
-    //    embedded/occluded renderer neither a border-box NOR a content-box
-    //    observer fired here, not even its guaranteed initial callback. Same
-    //    rendering-lifecycle starvation that made rAF hang the heavy tabs.
+    // 2. window resize — the SECOND trigger, not a workaround. The header's
+    //    height changes almost exclusively because the identity row WRAPS at
+    //    narrow widths (measured 45px -> 53px on a long deal name), and
+    //    wrapping is a function of viewport width, so resize covers the
+    //    real-world case directly and immediately.
+    //
+    //    NOTE for anyone testing this in an automated browser: RO delivers its
+    //    notifications as part of the rendering steps, and a document with
+    //    visibilityState === "hidden" does not run them. So in a headless or
+    //    occluded pane no RO callback fires — not even the guaranteed initial
+    //    one — while `resize` still does. That is spec-correct behavior for a
+    //    hidden document, NOT an engine defect and NOT unreliability: RO fires
+    //    normally for a real user with a visible tab. Do not add polling, a
+    //    MutationObserver, or any further redundancy on the strength of an
+    //    automated-pane observation.
     //
     // publish() is idempotent, so double-firing costs one property write.
     const ro =
@@ -413,7 +419,14 @@ export function SidebarNav({
  *  so a module can compose its own header/footer chrome inside the same shell. */
 export function SidebarShell({
   collapsed,
-  headerOffsetPx = 88,
+  // 89, not 88: the real measured header is 88.67px in Development and
+  // Diligence and 89px in Underwriting post-Shell-A. This is the SSR /
+  // first-paint fallback only — every surface publishes --app-header-h, so
+  // it is dead code unless the hook fails to mount. One value in all three
+  // rails so the eventual swap to a shared constant is a find/replace.
+  // On a wrapping deal at 1054 the real height is 97, so a fallback that
+  // ever fires is 8px short there — accepted; no branching for a dead path.
+  headerOffsetPx = 89,
   className = "",
   children,
 }: {

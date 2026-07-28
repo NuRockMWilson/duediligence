@@ -50,6 +50,13 @@ export default async function DealsPage() {
   return (
     <div className="min-h-screen bg-[#F7F8FA]">
       {/* Simple top header — just branding + user, no module switcher */}
+      {/* --app-header-h is intentionally NOT published on this surface.
+          The hook that publishes it is a client hook and this header is a
+          server component — but converting it would buy nothing, because
+          this list surface renders NO rail, so nothing consumes the
+          variable here (measured: aside absent, var unset). If a rail is
+          ever added to this surface, mount useHeaderHeightVar in the
+          header FIRST or the rail will fall back to its sentinel. */}
       <header className="bg-nurock-navy text-white shadow-lg sticky top-0 z-50">
         <div className="max-w-[1600px] mx-auto px-5 flex items-center justify-between gap-4 min-h-[44px]">
           <div className="flex items-center gap-3">
