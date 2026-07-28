@@ -102,9 +102,40 @@ export function useHeaderHeightVar(
       }
     };
     publish();
-    const ro = new ResizeObserver(publish);
-    ro.observe(el);
-    return () => ro.disconnect();
+
+    // TWO independent triggers, because neither alone is sufficient.
+    //
+    // 1. ResizeObserver — the precise one. `box: "border-box"` matches what
+    //    publish() actually measures (getBoundingClientRect().height is the
+    //    BORDER box); the default content-box would miss any change that moves
+    //    the border box only — padding, a border, a row's vertical padding
+    //    shifting at a breakpoint.
+    //
+    // 2. window resize — the DURABLE one. The header's height changes almost
+    //    exclusively because the identity row WRAPS at narrow widths (measured
+    //    45px -> 53px on a long deal name), and wrapping is a function of
+    //    viewport width, so a resize listener covers the real-world case
+    //    directly. It also keeps this working where ResizeObserver callbacks
+    //    are throttled or never delivered — which is not hypothetical: in an
+    //    embedded/occluded renderer neither a border-box NOR a content-box
+    //    observer fired here, not even its guaranteed initial callback. Same
+    //    rendering-lifecycle starvation that made rAF hang the heavy tabs.
+    //
+    // publish() is idempotent, so double-firing costs one property write.
+    const ro =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(publish) : null;
+    try {
+      ro?.observe(el, { box: "border-box" });
+    } catch {
+      // Older engines reject the options bag — fall back to content-box rather
+      // than losing observation entirely.
+      ro?.observe(el);
+    }
+    window.addEventListener("resize", publish);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", publish);
+    };
   }, [ref]);
 }
 
