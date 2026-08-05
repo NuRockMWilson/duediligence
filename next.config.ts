@@ -15,7 +15,26 @@ import { fileURLToPath } from "node:url";
 // Setting it explicitly is a no-op on Vercel and makes local dev work.
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 
+// ============================================================================
+// PATH-BASED MOUNTING — OFF BY DEFAULT, ONE VARIABLE TO TURN ON.
+//
+// The platform is consolidating onto one origin, app.nurock.com, with each module
+// under a path segment. Setting NEXT_PUBLIC_BASE_PATH="/duediligence" mounts this app
+// there; leaving it unset is today's behaviour, byte-for-byte.
+//
+// BOTH basePath AND assetPrefix, and assetPrefix is not optional. Without it every
+// module requests /_next/static/... from the shell origin, the shell answers with
+// ITS chunks, and the app loads the wrong JavaScript — it renders, then dies.
+//
+// Same variable src/lib/url.ts reads, deliberately: basePath and the fetch prefix
+// cannot drift apart if there is only one source. basePath covers next/link, the
+// router and next/image; fetch() is NOT covered, which is what src/lib/url.ts and
+// scripts/no-bare-fetch-check.mjs exist for.
+// ============================================================================
+const BASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/+$/, "");
+
 const nextConfig: NextConfig = {
+  ...(BASE_PATH ? { basePath: BASE_PATH, assetPrefix: BASE_PATH } : {}),
   turbopack: {
     root: appDir,
   },

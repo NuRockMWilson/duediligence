@@ -44,6 +44,14 @@ jobs:
       - name: Shared-UI drift gate
         run: node scripts/check-shared-ui.mjs
 
+      # Fails on a bare absolute fetch("/..."). Next's basePath does not prefix
+      # fetch(), so under path-based mounting (app.nurock.com/duediligence) a bare path
+      # resolves against the shell origin, not this module. Enforced rather than
+      # conventional because in the underwriting module one such site sat inside a
+      # FAIL-OPEN probe and silently disabled a write guard — no error, no test.
+      - name: Path-agnostic fetch check
+        run: node scripts/no-bare-fetch-check.mjs
+
       - name: Type-check
         run: npx tsc --noEmit
 
