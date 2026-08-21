@@ -288,20 +288,55 @@ export async function inviteUser(input: {
 
   const sb = ctx.supabase as unknown as UntypedSb;
 
-  const { error: invErr } = await sb.from("app_user_invites").upsert(
-    {
-      email,
-      display_name: input.displayName.trim() || null,
-      devmgmt_role: input.devmgmtRole,
-      underwriting_role: input.underwritingRole,
-      diligence_role: input.diligenceRole,
-      invited_by: ctx.access.userId,
-      claimed_at: null,
-      claimed_user_id: null,
-    },
-    { onConflict: "email" }
-  );
-  if (invErr) return { error: invErr.message };
+  // ---- INVITE-CHAIN STEP 2: mint through the gated function -----------------
+  // See the identical block in devmgmt's copy for why. In short:
+  // app_user_invites is policy-open and client-writable, and
+  // claim_pending_invite writes its role columns straight into app_user_roles
+  // while running as the table owner — so the one policy that would refuse the
+  // write (app_user_roles_wr) is never evaluated. Any signed-in user could self-
+  // mint an admin invite and claim it.
+  //
+  // THIS COPY IS THE THREE-MODULE ONE. diligence 0086 added diligence_role and
+  // redefined claim_pending_invite to insert a third app_user_roles row, so the
+  // escalation reaches THREE modules here, not two — and create_app_invite has to
+  // carry the third role or minting would silently drop it.
+  //
+  // The 42883 fallback is deliberate: step 1's migration may not have run yet, and
+  // a missing function must not take onboarding down. It degrades to exactly
+  // today's behaviour and nothing worse. Every other error is surfaced.
+  const { error: rpcErr } = await (sb as unknown as {
+    rpc: (fn: string, args: Record<string, unknown>) => Promise<{ error: { code?: string; message: string } | null }>;
+  }).rpc("create_app_invite", {
+    p_email: email,
+    p_display_name: input.displayName.trim() || null,
+    p_devmgmt_role: input.devmgmtRole,
+    p_underwriting_role: input.underwritingRole,
+    p_diligence_role: input.diligenceRole,
+  });
+  if (rpcErr) {
+    const missing = rpcErr.code === "42883" || /create_app_invite/i.test(rpcErr.message);
+    if (!missing) return { error: rpcErr.message };
+    console.warn(
+      "[inviteUser] create_app_invite unavailable — falling back to the direct " +
+        "insert. Run 20260821_invite_chain_step1_minting_function.sql to close " +
+        "the self-invite escalation. Detail:",
+      rpcErr.message,
+    );
+    const { error: invErr } = await sb.from("app_user_invites").upsert(
+      {
+        email,
+        display_name: input.displayName.trim() || null,
+        devmgmt_role: input.devmgmtRole,
+        underwriting_role: input.underwritingRole,
+        diligence_role: input.diligenceRole,
+        invited_by: ctx.access.userId,
+        claimed_at: null,
+        claimed_user_id: null,
+      },
+      { onConflict: "email" }
+    );
+    if (invErr) return { error: invErr.message };
+  }
 
   // Already in the directory? Apply roles now and mark the invite claimed.
   const { data: existing } = await sb
