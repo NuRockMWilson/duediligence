@@ -2,7 +2,14 @@
 -- dm_diligence_audit_log — make it APPEND-ONLY, which is what the code already
 -- believes it is
 --
--- *** AWAITS OWNER RUN. NOT APPLIED BY ME. ***
+-- *** APPLIED BY THE OWNER 2026-08-20. Ran successfully. ***
+--
+-- VERIFIED after: no ALL/UPDATE/DELETE policy remains on the table, and
+-- UPDATE/DELETE/TRUNCATE are revoked from both anon and authenticated. The log is
+-- append-only on both layers.
+-- STILL OWED: the functional test in VERIFICATION 4 — generate an event and
+-- confirm it APPEARS. The writer swallows its error, so a missing row is the only
+-- symptom a broken INSERT policy would produce.
 -- ============================================================================
 -- WHAT IS THERE NOW
 -- ============================================================================
