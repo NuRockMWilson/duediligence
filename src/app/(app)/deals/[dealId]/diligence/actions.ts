@@ -884,7 +884,12 @@ export async function exportDiligencePacket(input: {
       getDiligenceFinancierCoverage(input.dealId),
     ]);
 
+    // SERVER-SIDE, SO EXPLICIT ZONE. Vercel runs in UTC; without timeZone a
+    // report generated after 8pm EDT is stamped the NEXT calendar day. Same
+    // fault as the audit trail rendering 15:57Z as "3:57 PM" (fixed 2026-08-21),
+    // one field narrower.
     const generatedOn = new Date().toLocaleDateString("en-US", {
+      timeZone: "America/New_York",
       year: "numeric",
       month: "long",
       day: "numeric",
@@ -956,7 +961,12 @@ export async function exportFinancierPacket(input: {
     const financier = financiers.find((f) => f.templateId === input.templateId);
     if (!financier) return { error: "This packet is no longer on the deal." };
 
+    // SERVER-SIDE, SO EXPLICIT ZONE. Vercel runs in UTC; without timeZone a
+    // report generated after 8pm EDT is stamped the NEXT calendar day. Same
+    // fault as the audit trail rendering 15:57Z as "3:57 PM" (fixed 2026-08-21),
+    // one field narrower.
     const generatedOn = new Date().toLocaleDateString("en-US", {
+      timeZone: "America/New_York",
       year: "numeric",
       month: "long",
       day: "numeric",

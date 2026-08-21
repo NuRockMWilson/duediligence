@@ -35,6 +35,33 @@ const EVENT_LABEL: Record<string, string> = {
   packet_removed: "Packet removed",
 };
 
+/**
+ * THIS RUNS ON THE SERVER, WHICH IS WHY IT WAS WRONG.
+ *
+ * AuditPage is an async server component, so toLocaleString executed on Vercel —
+ * and Vercel runs in UTC. The formatted string was then shipped as HTML and never
+ * re-localised, so a row stored at 2026-08-21 15:57:44+00 rendered as
+ * "8/21/2026, 3:57 PM" with no timezone label: the UTC wall clock presented as
+ * local time. MEASURED 2026-08-21 against the stored rows.
+ *
+ * Four hours off under EDT, five under EST — so a log spanning the DST boundary
+ * carried two different skews, neither flagged. And "3:57 PM" is a believable
+ * work time, so there was no wrongness cue at all. Same family as the rest of
+ * this codebase's defects: the stored instant was correct and the rendered value
+ * was a different quantity computed independently of it.
+ *
+ * THE AUDIT TRAIL IS THE COMPLIANCE ARTIFACT. A wrong instant on it is not
+ * cosmetic.
+ *
+ * FIXED BY BEING EXPLICIT RATHER THAN BY MOVING THE WORK TO THE CLIENT. An IANA
+ * zone handles DST automatically, and timeZoneName makes the value
+ * self-describing, so it can never again be read as some other zone. If NuRock
+ * ever operates across zones this should become a client-rendered timestamp
+ * instead — the viewer's zone is the only correct answer then, and a server
+ * component cannot know it.
+ */
+const AUDIT_TZ = "America/New_York";
+
 function formatWhen(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleString("en-US", {
@@ -43,6 +70,8 @@ function formatWhen(iso: string): string {
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: AUDIT_TZ,
+    timeZoneName: "short",
   });
 }
 

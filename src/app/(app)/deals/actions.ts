@@ -115,7 +115,12 @@ export async function exportPortfolioPdf(): Promise<
       font: brand.fontBold,
       color: PDF_COLORS.tanDark,
     });
+    // SERVER-SIDE, SO EXPLICIT ZONE. Vercel runs in UTC; without timeZone a
+    // report generated after 8pm EDT is stamped the NEXT calendar day. Same
+    // fault as the audit trail rendering 15:57Z as "3:57 PM" (fixed 2026-08-21),
+    // one field narrower.
     const asOf = new Date().toLocaleDateString("en-US", {
+      timeZone: "America/New_York",
       month: "long",
       day: "numeric",
       year: "numeric",
