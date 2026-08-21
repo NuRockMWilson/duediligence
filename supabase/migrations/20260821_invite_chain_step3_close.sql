@@ -1,8 +1,9 @@
 -- ============================================================================
 -- INVITE CHAIN — STEP 3 OF 3. This is the one that closes it.
 --
--- *** AWAITS OWNER RUN. NOT APPLIED BY ME. ***
--- *** DO NOT RUN THIS BEFORE STEP 2 IS DEPLOYED. See ORDER, below.          ***
+-- *** APPLIED BY THE OWNER 2026-08-21. Ran successfully. ***
+-- *** THE SELF-INVITE ESCALATION IS CLOSED. Step 2 (app code) was deployed  ***
+-- *** first, as required — devmgmt c0e7a0e / diligence b0ab253.             ***
 -- ============================================================================
 -- ORDER, AND THE ONE SEQUENCE THAT BREAKS ONBOARDING
 -- ============================================================================
