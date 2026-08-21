@@ -132,26 +132,24 @@ export async function setModuleRole(input: {
     }
   }
 
-  if (input.roleKey === null) {
-    const { error } = await sb
-      .from("app_user_roles")
-      .delete()
-      .eq("user_id", input.userId)
-      .eq("module", input.module);
-    if (error) return { error: error.message };
-  } else {
-    const { error } = await sb.from("app_user_roles").upsert(
-      {
-        user_id: input.userId,
-        module: input.module,
-        role_key: input.roleKey,
-        granted_by: ctx.access.userId,
-        granted_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id,module" }
-    );
-    if (error) return { error: error.message };
-  }
+  // Through the RPCs — see applyModuleRole for why the direct write cannot
+  // succeed. This site DID check its error, so the refusal was at least
+  // reportable here; the dropdown path below was the silent one.
+  const gridRpc = sb as unknown as {
+    rpc: (fn: string, args: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
+  };
+  const { error } =
+    input.roleKey === null
+      ? await gridRpc.rpc("app_remove_module_role", {
+          p_user_id: input.userId,
+          p_module: input.module,
+        })
+      : await gridRpc.rpc("app_set_module_role", {
+          p_user_id: input.userId,
+          p_module: input.module,
+          p_role: input.roleKey,
+        });
+  if (error) return { error: error.message };
 
   revalidatePath("/settings/team");
   return { success: true };
@@ -179,7 +177,19 @@ export async function removeTeamMember(userId: string) {
     };
   }
 
-  await sb.from("app_user_roles").delete().eq("user_id", userId);
+  // ALL MODULES IN ONE CALL, and this also retires the partial-delete hazard.
+  // The direct `delete().eq("user_id", ...)` here was unchecked, so under any
+  // per-module restriction it would half-complete and report success. Passing a
+  // null module removes every role, and the function's own last-admin guard runs
+  // as well — a second layer under the app-side check above.
+  const rmRpc = sb as unknown as {
+    rpc: (fn: string, args: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
+  };
+  const { error: rolesErr } = await rmRpc.rpc("app_remove_module_role", {
+    p_user_id: userId,
+    p_module: null,
+  });
+  if (rolesErr) return { error: rolesErr.message };
   const { error } = await ctx.supabase
     .from("app_users")
     .delete()
@@ -244,20 +254,48 @@ async function applyModuleRole(
   roleKey: string | null,
   grantedBy: string
 ) {
-  if (roleKey === null) {
-    await sb.from("app_user_roles").delete().eq("user_id", userId).eq("module", module);
-  } else {
-    await sb.from("app_user_roles").upsert(
-      {
-        user_id: userId,
-        module,
-        role_key: roleKey,
-        granted_by: grantedBy,
-        granted_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id,module" }
-    );
-  }
+  // ROUTED THROUGH THE RPCs, AND THE ERROR IS CHECKED. Both changes matter.
+  //
+  // WHY THE DIRECT WRITE CANNOT WORK: 20260804_app_user_roles_privileges_reconcile
+  // revoked INSERT/UPDATE/DELETE/TRUNCATE on app_user_roles from `authenticated`
+  // — its own heading reads "authenticated reads only". So this upsert had been
+  // refused at the PRIVILEGE layer for every module since that migration ran, and
+  // the refusal was invisible because the result was never inspected. The role
+  // dropdown appeared to work and changed nothing. Diligence had zero role rows
+  // because no one could ever grant one.
+  //
+  // 20260807_restore_role_management provides the legal path: app_set_module_role
+  // and app_remove_module_role, SECURITY DEFINER so they may write the table, with
+  // the org-admin check INSIDE the body. They also validate the module against a
+  // whitelist, validate the role against app_roles, require the user to exist in
+  // auth.users, and stamp granted_by from auth.uid() rather than accepting it —
+  // so attribution through this path cannot be forged.
+  //
+  // app_remove_module_role additionally refuses to remove the LAST admin, which a
+  // policy cannot express and which is unrecoverable through the UI.
+  //
+  // RETURNING THE ERROR instead of swallowing it is the other half. A silent
+  // refusal is what let this go unnoticed for three weeks; the caller now surfaces
+  // it, and the last-admin guard's message is worth showing rather than dropping.
+  const rpc = sb as unknown as {
+    rpc: (
+      fn: string,
+      args: Record<string, unknown>
+    ) => Promise<{ error: { message: string } | null }>;
+  };
+  const { error } =
+    roleKey === null
+      ? await rpc.rpc("app_remove_module_role", { p_user_id: userId, p_module: module })
+      : await rpc.rpc("app_set_module_role", {
+          p_user_id: userId,
+          p_module: module,
+          p_role: roleKey,
+        });
+  // grantedBy is no longer passed: the function takes it from auth.uid(), which is
+  // the point. Kept in the signature so callers do not all have to change, and
+  // referenced here so it is not an unused parameter.
+  void grantedBy;
+  if (error) throw new Error(error.message);
 }
 
 /**
