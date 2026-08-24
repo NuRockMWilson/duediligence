@@ -151,8 +151,38 @@ export async function setModuleRole(input: {
         });
   if (error) return { error: error.message };
 
+  // READ THE ROW BACK. `{ success: true }` was a claim that the RPC did not
+  // return an error, and the UI spends it on a stronger claim than that: the
+  // toast says "Role updated". The two are not the same statement. The RPCs are
+  // SECURITY DEFINER and do their own authorisation inside the function body, so
+  // a refusal there, or a write that lands somewhere other than intended, comes
+  // back with no error at all.
+  //
+  // MEASURED, WHICH IS WHY THIS IS NOT THEORETICAL: this route returns HTTP 503
+  // on every role write while the row commits anyway. Anything that depends on
+  // the response's render leg — including revalidatePath below and the client's
+  // router.refresh() — is unreliable here, so the returned value is the only
+  // thing the screen can trust. Re-reading makes it a report instead of a hope.
+  const { data: after } = await sb
+    .from("app_user_roles")
+    .select("role_key")
+    .eq("user_id", input.userId)
+    .eq("module", input.module)
+    .maybeSingle();
+  const persisted = (after as { role_key?: string } | null)?.role_key ?? null;
+  if (persisted !== input.roleKey) {
+    return {
+      error:
+        `The change did not stick — ${input.module} now reads ` +
+        `"${persisted ?? "no access"}", not "${input.roleKey ?? "no access"}". ` +
+        "Nothing reported a failure, so this is a silent refusal inside " +
+        "app_set_module_role or a policy on app_user_roles. Do not retry until " +
+        "that is explained.",
+    };
+  }
+
   revalidatePath("/settings/team");
-  return { success: true };
+  return { success: true, persisted };
 }
 
 /**

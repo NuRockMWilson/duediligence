@@ -65,14 +65,40 @@ export default function TeamList({
   const [isPending, startTransition] = useTransition();
 
   function handleRoleChange(userId: string, module: string, value: string) {
+    const wanted = value === "" ? null : value;
     startTransition(async () => {
-      const res = await setModuleRole({ userId, module, roleKey: value === "" ? null : value });
+      // THE CALL CAN FAIL WITHOUT RETURNING ANYTHING, and until now that was the
+      // one outcome with no message. MEASURED on this route: POST /settings/team
+      // returns 503 on every role write while the row commits. When the action's
+      // return value still arrives, the checks below work — that is why a toast
+      // appears at all. When it does not, this promise REJECTS, the rejection is
+      // unhandled inside startTransition, and the user sees nothing whatsoever.
+      // Silence after a click on a permissions screen is the worst of the
+      // available failures, so it now says so.
+      let res: Awaited<ReturnType<typeof setModuleRole>>;
+      try {
+        res = await setModuleRole({ userId, module, roleKey: wanted });
+      } catch (e) {
+        toast.error(
+          "Could not confirm the change reached the server" +
+            (e instanceof Error && e.message ? ` (${e.message})` : "") +
+            ". Reload and read the row before trying again — the write may " +
+            "have landed."
+        );
+        router.refresh();
+        return;
+      }
       if ("error" in res && res.error) {
         toast.error(res.error);
         router.refresh();
         return;
       }
-      toast.success("Role updated");
+      // Names the value, not just the event. "Role updated" is indistinguishable
+      // from "something happened"; the action has now re-read the row, so the
+      // toast can report what is actually stored.
+      toast.success(
+        `${module} role is now ${wanted ?? "no access"}`
+      );
       router.refresh();
     });
   }
