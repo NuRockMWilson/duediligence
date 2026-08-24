@@ -90,7 +90,20 @@ export default function SettingsLayout({
                     {inner}
                   </a>
                 ) : (
-                  <Link key={item.href} href={item.href} className={className}>
+                  // NO PREFETCH — same reason as devmgmt's settings layout, and
+                  // the 503s were measured on BOTH apps. Next prefetches every
+                  // Link in the viewport (production only), so a sidebar of admin
+                  // routes fires a burst of concurrent server-component
+                  // invocations on every render — including the re-render that
+                  // router.refresh() triggers after a role write. A fraction of
+                  // that burst was returning 503 while the same routes returned
+                  // 200 when fetched individually. Navigation is unchanged.
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    prefetch={false}
+                    className={className}
+                  >
                     {inner}
                   </Link>
                 );
