@@ -67,8 +67,14 @@ export default function LoginPage() {
             <div className="font-display text-base uppercase tracking-wider text-nurock-navy font-semibold">
               NuRock
             </div>
+            {/* This app is DUE DILIGENCE, and this line said "Development
+                Management" — copied from devmgmt when the app was scaffolded and
+                never corrected. Measured by the live session, which noted both
+                non-underwriting sign-in cards announcing the same module.
+                Signing in to the wrong-sounding app is a small thing until you
+                are the person wondering whether you clicked the wrong link. */}
             <div className="text-[10px] uppercase tracking-wider text-nurock-slate-light">
-              Development Management
+              Due Diligence
             </div>
           </div>
         </div>
