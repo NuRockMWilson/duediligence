@@ -9,15 +9,32 @@
 // untyped accessor for the not-yet-typed dm_diligence_* tables, revalidate the
 // diligence + dashboard routes after every mutation.
 //
-// Per-action permission throws are intentionally omitted to match the rest of
+// Per-action permission throws were intentionally omitted to match the rest of
 // the devmgmt actions (retainage, invoices) — access is gated at the module
 // route + the UI hides write controls for non-editors; RLS rollout is a
 // separate migration concern. The status/approval consistency CHECKs in 0081
 // are the hard backstop against half-set data.
+//
+// THAT REASONING NO LONGER HOLDS FOR THE SIGN-OFF CHAIN, and the premise was
+// wrong rather than merely outdated. "Access is gated at the module route" is
+// not true of a server action: it is a POST endpoint that does not pass through
+// the (app) route gate at all. Next's own docs are explicit — "even if a Server
+// Action is not imported elsewhere in your code, it can still be called
+// externally", and "a page-level authentication check does not extend to the
+// Server Actions defined within it". Nor does the UI hiding a control gate
+// anything; it only hides it.
+//
+// clearDiligenceSignoff is now guarded (2026-08-31): it had NO check at all, not
+// even `!user`, and its only protection was the schema-wide anon write revoke.
+// It vacates an entire sign-off chain, and the sign-off chain is the sole
+// authority for a deal item's status. The rest of this file is still unguarded
+// and is a known gap, not a decision — the 20260831_signoffs_scope_rls.sql
+// policy is what covers those paths today.
 // =============================================================================
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { assertDevmgmtCan } from "@/lib/auth/access";
 import { sendNotification } from "@/lib/notifications";
 import {
   getStorageProvider,
@@ -841,7 +858,44 @@ export async function clearDiligenceSignoff(input: {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+  // WAS ABSENT ENTIRELY — not even this check. The function destructured `user`
+  // and carried on, writing `user?.id ?? null` into the audit event, so an
+  // unauthenticated caller could clear a sign-off chain and be recorded as
+  // nobody. Its only protection was the schema-wide anon write revoke, which is
+  // luck rather than design. Sibling setDiligenceSignoff has always had this.
+  if (!user) return { error: "Not signed in." };
+  // The drawer gates on devmgmt, not diligence — see
+  // 20260831_signoffs_scope_rls.sql's header for why. Bootstrap-safe, so it adds
+  // no lockout; the DB policy is what refuses a roleless caller.
+  await assertDevmgmtCan("edit");
   const sb = supabase as AnySb;
+
+  // ==========================================================================
+  // VERIFY THE ITEM BELONGS TO THE DEAL THE CALLER CLAIMS
+  // ==========================================================================
+  // The DELETE below filters deal_item_id + role, which IS correctly scoped —
+  // (deal_item_id, role) is the table's unique key, so it can only ever hit the
+  // right rows. `input.dealId` was the unchecked part: it was used for the audit
+  // event and the cache revalidation and NOTHING verified it matched. Pass a
+  // dealItemId from deal B with dealId = A and the correct rows are cleared while
+  // logDiligenceEvent records the clear against deal A, revalidate() refreshes
+  // A, and deal B's audit trail shows the chain vacating with no event at all.
+  //
+  // Checked rather than filtered, deliberately. Adding .eq("deal_id", …) to the
+  // DELETE would look equivalent and is not: deal_id is denormalized onto the
+  // signoff row, so any row written before that column was populated would be
+  // silently MISSED and Undo would half-work. Verifying the parent cannot miss
+  // rows. Same idiom as setDiligenceDueDate.
+  const { data: ownItem, error: ownErr } = await sb
+    .from("dm_diligence_deal_items")
+    .select("id")
+    .eq("id", input.dealItemId)
+    .eq("deal_id", input.dealId)
+    .maybeSingle();
+  if (ownErr) return { error: ownErr.message };
+  if (!ownItem) {
+    return { error: "That diligence item does not belong to this deal." };
+  }
 
   // Clearing a role also clears everything downstream of it (a chain can't
   // hold an Approver decision above a vacated Reviewer slot).
@@ -861,7 +915,7 @@ export async function clearDiligenceSignoff(input: {
   await logDiligenceEvent(sb, {
     dealId: input.dealId,
     dealItemId: input.dealItemId,
-    actorUserId: user?.id ?? null,
+    actorUserId: user.id, // narrowed by the !user return above
     eventType: "signoff_cleared",
     summary: `Sign-off undone (${rolesToClear.join(", ")})`,
     detail: { rolesCleared: rolesToClear },

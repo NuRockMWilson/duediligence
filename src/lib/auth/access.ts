@@ -137,6 +137,43 @@ export async function requirePermission(
   return access as UserAccess;
 }
 
+/**
+ * Bootstrap-safe action guard for Development (devmgmt) mutations, ported
+ * verbatim from nurock-devmgmt's lib/auth/access.ts so the two apps enforce one
+ * rule rather than two similar ones.
+ *
+ * WHY NOT JUST USE requirePermission("devmgmt", "edit"). Because it fails
+ * CLOSED, and this repo did not have a bootstrap-safe guard at all. A user with
+ * NO devmgmt role would be thrown out of a control they can use today — and when
+ * RBAC is dormant (no roles seeded) EVERY caller has no role, so a closed guard
+ * locks the whole org out before roles are assigned. That failure mode has cost
+ * this platform an outage once already.
+ *
+ * Enforcement mirrors the (app) module gate's philosophy — it NEVER introduces a
+ * lockout the gate doesn't already have:
+ *   - org admin               → allowed (admin bypasses all checks).
+ *   - no Development role     → allowed HERE; defer to the module gate.
+ *   - holds a Development role → ENFORCE: the role must grant `action`, else throw.
+ *
+ * Net effect: it only ever BLOCKS a user positively known to hold a Development
+ * role that lacks the requested action (e.g. a `viewer` attempting an `edit`).
+ *
+ * NOTE THE ASYMMETRY WITH THE DATABASE, which is deliberate and is the intended
+ * end state: this fails open for the roleless caller while the 2026-08-31 RLS
+ * policies fail closed. So adding this guard is NOT equivalent to the DB rule —
+ * it makes the message readable for role-holders and leaves the roleless case to
+ * the database. Do not expect it to make a refusal disappear.
+ */
+export async function assertDevmgmtCan(action: ActionKey): Promise<void> {
+  const access = await getCurrentUserAccess();
+  if (!access || access.isOrgAdmin) return;
+  if (access.roles["devmgmt"] == null) return; // no role → defer to module gate
+  if (hasPermission(access, "devmgmt", action)) return;
+  throw new Error(
+    `Permission denied — your Development role doesn't allow "${action}".`
+  );
+}
+
 /** Server-action guard for org-admin-only operations (user management). */
 export async function requireOrgAdmin(): Promise<UserAccess> {
   const access = await getCurrentUserAccess();
