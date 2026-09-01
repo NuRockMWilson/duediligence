@@ -174,6 +174,45 @@ export async function assertDevmgmtCan(action: ActionKey): Promise<void> {
   );
 }
 
+/**
+ * Bootstrap-safe action guard for DILIGENCE mutations.
+ *
+ * ⚠️ USE THIS, NOT assertDevmgmtCan, ON DILIGENCE SURFACES. assertDevmgmtCan
+ * above tests the `devmgmt` role and fails open when the caller holds none — so
+ * on a diligence surface it enforces NOTHING for precisely the people who use
+ * it: a diligence-only user has no devmgmt role, hits the fail-open, and passes.
+ * A guard that is present in the code, counted by the guard-check gate, and
+ * inert in practice is worse than no guard, because it stops anyone looking.
+ *
+ * WHY IT ACCEPTS EITHER MODULE. This app's own route gate admits
+ * `diligence OR devmgmt OR org admin` ((app)/layout.tsx). A guard keyed only to
+ * diligence would lock out devmgmt users who legitimately work in here. The
+ * predicate below is deliberately the SAME SHAPE as the RLS policies applied on
+ * 2026-08-31 — app_can('diligence',action) OR app_can('devmgmt',action) OR org
+ * admin — so the application and the database agree rather than disagreeing in
+ * ways that only show up as a silent empty screen.
+ *
+ * Fails OPEN for a caller holding NEITHER role, matching assertDevmgmtCan's
+ * contract and for the same reason: when RBAC is dormant every caller is
+ * roleless, and a closed guard would lock out the whole org before roles are
+ * assigned. That has cost this platform an outage once already. The database
+ * fails closed for that caller, so the two layers are complementary — this one
+ * makes the refusal READABLE for role-holders; it does not replace the DB rule.
+ */
+export async function assertDiligenceCan(action: ActionKey): Promise<void> {
+  const access = await getCurrentUserAccess();
+  if (!access || access.isOrgAdmin) return;
+  // No role in EITHER module → defer to the module gate.
+  if (access.roles["diligence"] == null && access.roles["devmgmt"] == null) {
+    return;
+  }
+  if (hasPermission(access, "diligence", action)) return;
+  if (hasPermission(access, "devmgmt", action)) return;
+  throw new Error(
+    `Permission denied — your role doesn't allow "${action}" in Due Diligence.`
+  );
+}
+
 /** Server-action guard for org-admin-only operations (user management). */
 export async function requireOrgAdmin(): Promise<UserAccess> {
   const access = await getCurrentUserAccess();

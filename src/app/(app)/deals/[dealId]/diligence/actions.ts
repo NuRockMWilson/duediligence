@@ -24,17 +24,33 @@
 // Server Actions defined within it". Nor does the UI hiding a control gate
 // anything; it only hides it.
 //
-// clearDiligenceSignoff is now guarded (2026-08-31): it had NO check at all, not
+// clearDiligenceSignoff was guarded on 2026-08-31: it had NO check at all, not
 // even `!user`, and its only protection was the schema-wide anon write revoke.
 // It vacates an entire sign-off chain, and the sign-off chain is the sole
-// authority for a deal item's status. The rest of this file is still unguarded
-// and is a known gap, not a decision — the 20260831_signoffs_scope_rls.sql
-// policy is what covers those paths today.
+// authority for a deal item's status.
+//
+// ⚠️ THAT GUARD WAS THE WRONG ONE, corrected 2026-09-01. It used
+// assertDevmgmtCan, which tests the `devmgmt` role and fails OPEN for a caller
+// holding none — and a diligence-only user holds none, while this app's route
+// gate admits them by design. So the most sensitive action in the module was
+// guarded in appearance only, for precisely its most likely users. It now uses
+// assertDiligenceCan, which accepts either module's role and matches the RLS
+// predicate rather than diverging from it.
+//
+// GUARD STATUS OF THIS FILE, as of 2026-09-01: setDiligenceAssignee,
+// nudgeDiligenceAssignee and clearDiligenceSignoff carry assertDiligenceCan.
+// The remaining exports do NOT, and that is a recorded gap rather than a
+// decision — see scripts/server-action-guard-baseline.json, which the build gate
+// enforces as a shrinking list. Do not add a guard to a new export and leave the
+// baseline unchanged; do not add an export to the baseline to silence the gate.
+//
+// USE assertDiligenceCan, NOT assertDevmgmtCan, anywhere in this repo. The gate
+// deliberately does not count the latter as a guard, for the reason above.
 // =============================================================================
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { assertDevmgmtCan } from "@/lib/auth/access";
+import { assertDiligenceCan } from "@/lib/auth/access";
 import { sendNotification } from "@/lib/notifications";
 import {
   getStorageProvider,
@@ -153,6 +169,7 @@ export async function setDiligenceAssignee(input: {
   itemLabel?: string;
   notify?: boolean;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   if (input.dealItemIds.length === 0) return {};
   const supabase = await createClient();
   const sb = supabase as AnySb;
@@ -928,10 +945,23 @@ export async function clearDiligenceSignoff(input: {
   // nobody. Its only protection was the schema-wide anon write revoke, which is
   // luck rather than design. Sibling setDiligenceSignoff has always had this.
   if (!user) return { error: "Not signed in." };
-  // The drawer gates on devmgmt, not diligence — see
-  // 20260831_signoffs_scope_rls.sql's header for why. Bootstrap-safe, so it adds
-  // no lockout; the DB policy is what refuses a roleless caller.
-  await assertDevmgmtCan("edit");
+  // CORRECTED 2026-09-01. This was assertDevmgmtCan("edit"), on the reasoning
+  // that "the drawer gates on devmgmt, not diligence". That reasoning had a hole:
+  // assertDevmgmtCan fails OPEN when the caller holds no devmgmt role, and a
+  // DILIGENCE-ONLY user holds none — this app's route gate admits them by design
+  // ((app)/layout.tsx: diligence OR devmgmt OR org admin). So for exactly the
+  // users most likely to be in this drawer, the guard was inert. It read as
+  // protection in the code and in the audit, and enforced nothing.
+  //
+  // assertDiligenceCan accepts EITHER module's role, so it keeps the devmgmt
+  // path working while actually covering the diligence one, and it matches the
+  // RLS predicate in 20260831_signoffs_scope_rls.sql rather than diverging from
+  // it. Still bootstrap-safe: a caller with neither role is deferred to the
+  // module gate and refused by the DB policy.
+  //
+  // This matters more here than anywhere else in the file: clearing a sign-off
+  // chain vacates the sole authority for a deal item's status.
+  await assertDiligenceCan("edit");
   const sb = supabase as AnySb;
 
   // ==========================================================================
@@ -1120,6 +1150,7 @@ export async function nudgeDiligenceAssignee(input: {
   assigneeUserId: string;
   outstandingCount: number;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   await sendNotification({
     recipientUserId: input.assigneeUserId,
     dealId: input.dealId,

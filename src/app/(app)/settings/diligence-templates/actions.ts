@@ -13,6 +13,7 @@ import { revalidatePath } from "next/cache";
 import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/server";
 import { logDiligenceEvent } from "@/lib/diligence/audit";
+import { assertDiligenceCan } from "@/lib/auth/access";
 import {
   getTemplateDetail,
   type TemplateKind,
@@ -39,6 +40,7 @@ function revalidateTemplates() {
 export async function loadTemplateDetail(
   templateId: string
 ): Promise<TemplateDetail | null> {
+  await assertDiligenceCan("view");
   return getTemplateDetail(templateId);
 }
 
@@ -51,6 +53,7 @@ export async function createDiligenceTemplate(input: {
   financierName: string | null;
   description: string | null;
 }): Promise<{ id?: string; error?: string }> {
+  await assertDiligenceCan("edit");
   const name = input.name.trim();
   if (!name) return { error: "Template name is required." };
   if (input.kind === "nurock_standard")
@@ -81,6 +84,7 @@ export async function setDiligenceTemplateActive(input: {
   templateId: string;
   active: boolean;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = (await createClient()) as AnySb;
   // Guard: never retire the canonical template.
   const { data: t } = await supabase
@@ -121,6 +125,7 @@ export interface ParsedSheet {
 export async function previewChecklistImport(
   formData: FormData
 ): Promise<{ sheet?: ParsedSheet; error?: string }> {
+  await assertDiligenceCan("edit");
   const file = formData.get("file") as File | null;
   if (!file || !(file instanceof File)) return { error: "No file provided." };
 
@@ -174,6 +179,7 @@ export async function commitChecklistImport(input: {
   mapping: ImportColumnMapping;
   source: "import_excel" | "import_csv";
 }): Promise<{ templateId?: string; itemCount?: number; error?: string }> {
+  await assertDiligenceCan("edit");
   const name = input.name.trim();
   if (!name) return { error: "Template name is required." };
   if (input.mapping.title == null || input.mapping.title < 0)
@@ -260,6 +266,7 @@ export async function addCrosswalkMapping(input: {
   externalItemId: string;
   mode?: "all" | "any";
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = (await createClient()) as AnySb;
   const { error } = await supabase.from("nurock_diligence_crosswalk").upsert(
     {
@@ -278,6 +285,7 @@ export async function removeCrosswalkMapping(input: {
   canonicalItemId: string;
   externalItemId: string;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = (await createClient()) as AnySb;
   const { error } = await supabase
     .from("nurock_diligence_crosswalk")
@@ -294,6 +302,7 @@ export async function setCrosswalkMode(input: {
   externalItemId: string;
   mode: "all" | "any";
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = (await createClient()) as AnySb;
   const { error } = await supabase
     .from("nurock_diligence_crosswalk")
@@ -311,6 +320,7 @@ export async function adoptTemplateForDeal(input: {
   dealId: string;
   templateId: string;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = await createClient();
   const {
     data: { user },
@@ -343,6 +353,7 @@ export async function unadoptTemplateForDeal(input: {
   dealId: string;
   templateId: string;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const authed = await createClient();
   const {
     data: { user },
