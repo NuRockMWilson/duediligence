@@ -68,13 +68,14 @@ export default function TeamList({
     const wanted = value === "" ? null : value;
     startTransition(async () => {
       // THE CALL CAN FAIL WITHOUT RETURNING ANYTHING, and until now that was the
-      // one outcome with no message. MEASURED on this route: POST /settings/team
-      // returns 503 on every role write while the row commits. When the action's
-      // return value still arrives, the checks below work — that is why a toast
-      // appears at all. When it does not, this promise REJECTS, the rejection is
-      // unhandled inside startTransition, and the user sees nothing whatsoever.
-      // Silence after a click on a permissions screen is the worst of the
-      // available failures, so it now says so.
+      // one outcome with no message. (RETRACTED 2026-08-27: this comment used to
+      // claim, as MEASURED, that POST /settings/team returns 503 on every role
+      // write. It does not — responseStatus reads 200 on every entry; the 503s
+      // were a monitoring-extension artifact.) The catch still earns its place on
+      // its own terms: if this promise REJECTS, the rejection is unhandled inside
+      // startTransition and the user sees nothing whatsoever. Silence after a
+      // click on a permissions screen is the worst of the available failures, so
+      // it now says so.
       let res: Awaited<ReturnType<typeof setModuleRole>>;
       try {
         res = await setModuleRole({ userId, module, roleKey: wanted });

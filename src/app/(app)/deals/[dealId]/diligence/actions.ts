@@ -641,28 +641,92 @@ async function deriveStatusFromChain(
   sb: AnySb,
   dealId: string,
   dealItemId: string,
-  approverUserId?: string | null
+  approverUserId?: string | null,
+  // Set ONLY by callers that just deleted sign-off rows on purpose (Undo). It
+  // distinguishes "the chain is legitimately empty because I emptied it" from
+  // "the chain read came back empty and I do not know why" — see the guard
+  // below, which must not fire for the former.
+  chainIntentionallyEmptied = false
 ): Promise<void> {
-  const [{ data: signoffs }, { data: itemRow }, { count: docCount }] =
-    await Promise.all([
-      sb
-        .from("dm_diligence_signoffs")
-        .select("role, decision")
-        .eq("deal_item_id", dealItemId),
-      sb
-        .from("dm_diligence_deal_items")
-        .select("status")
-        .eq("id", dealItemId)
-        .maybeSingle(),
-      sb
-        .from("dm_diligence_item_documents")
-        .select("document_id", { count: "exact", head: true })
-        .eq("deal_item_id", dealItemId),
-    ]);
+  const [signoffRes, itemRes, docRes] = await Promise.all([
+    sb
+      .from("dm_diligence_signoffs")
+      .select("role, decision")
+      .eq("deal_item_id", dealItemId),
+    sb
+      .from("dm_diligence_deal_items")
+      .select("status")
+      .eq("id", dealItemId)
+      .maybeSingle(),
+    sb
+      .from("dm_diligence_item_documents")
+      .select("document_id", { count: "exact", head: true })
+      .eq("deal_item_id", dealItemId),
+  ]);
+
+  // ⚠️ DO NOT REMOVE THESE ERROR CHECKS. Their absence caused a real desync.
+  //
+  // Foxcroft item 100 spent from 2026-07-09 onward showing three APPROVED
+  // sign-offs against an item reading "Not started" with no approval stamp. The
+  // sign-off rows were never modified — the ITEM was. Mechanism: these reads
+  // were destructured as `{ data }` only, so a failed or empty sign-offs read
+  // gave `rows = []`, every branch below fell through to "not_started", and the
+  // `approved_at: next === "approved" ? … : null` line then CLEARED the approval
+  // stamp. An unreadable chain is indistinguishable from an absent one, and the
+  // difference is a wiped approval.
+  //
+  // This matters more now than it did then. RLS was tightened across this schema
+  // on 2026-08-31; the sign-offs SELECT predicate is still open, but if it is
+  // ever narrowed, an unchecked read here would silently downgrade every
+  // approved item in the portfolio. Fixing this is a prerequisite for scoping
+  // that read.
+  //
+  // Failing loudly is correct: the caller is a sign-off write that already
+  // succeeded, so refusing to derive leaves the chain intact and the item
+  // stale — recoverable, and visible. Deriving from a bad read is neither.
+  if (signoffRes.error) {
+    throw new Error(
+      `Cannot derive item status: the sign-off chain could not be read (${signoffRes.error.message}). The sign-off was recorded; the item status was left unchanged.`
+    );
+  }
+  if (itemRes.error) {
+    throw new Error(
+      `Cannot derive item status: the item could not be read (${itemRes.error.message}).`
+    );
+  }
+  if (docRes.error) {
+    throw new Error(
+      `Cannot derive item status: the item's documents could not be counted (${docRes.error.message}).`
+    );
+  }
+
+  const signoffs = signoffRes.data;
+  const itemRow = itemRes.data;
+  const docCount = docRes.count;
+
   const current = (itemRow as { status?: string } | null)?.status ?? null;
   if (current === "waived" || current === "na") return;
 
   const rows = (signoffs ?? []) as SignoffRow[];
+
+  // Second half of the same guard. Even a SUCCESSFUL read that comes back empty
+  // is contradictory when the item is already approved: an approved item has, by
+  // construction, an approver sign-off. Downgrading it to "not_started" and
+  // clearing the stamp is never the right response to that contradiction — it
+  // destroys the record of an approval rather than reporting a problem.
+  //
+  // Un-approving legitimately goes through the drawer's Undo, which DELETES the
+  // sign-off rows and THEN re-derives — so at that moment the item still reads
+  // "approved" while the chain is already empty. That is the one case where this
+  // state is expected, and it is why the flag exists rather than the guard
+  // simply testing the state. (An earlier draft of this guard omitted the flag
+  // and would have broken Undo entirely.)
+  if (current === "approved" && rows.length === 0 && !chainIntentionallyEmptied) {
+    throw new Error(
+      "Cannot derive item status: the item is approved but its sign-off chain came back empty. Refusing to clear the approval. This is a data or permission problem, not a user error — report it."
+    );
+  }
+
   const byRole = new Map(rows.map((r) => [r.role, r.decision]));
 
   let next: DiligenceStatus;
@@ -910,7 +974,9 @@ export async function clearDiligenceSignoff(input: {
 
   // Derive the headline status back DOWN as well — undoing every decision
   // returns the item to not started (or in progress when documents exist).
-  await deriveStatusFromChain(sb, input.dealId, input.dealItemId);
+  // The trailing `true` says the empty chain is intentional: this function just
+  // deleted those rows, so the emptiness is expected rather than suspicious.
+  await deriveStatusFromChain(sb, input.dealId, input.dealItemId, null, true);
 
   await logDiligenceEvent(sb, {
     dealId: input.dealId,

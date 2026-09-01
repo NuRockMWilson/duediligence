@@ -158,11 +158,17 @@ export async function setModuleRole(input: {
   // a refusal there, or a write that lands somewhere other than intended, comes
   // back with no error at all.
   //
-  // MEASURED, WHICH IS WHY THIS IS NOT THEORETICAL: this route returns HTTP 503
-  // on every role write while the row commits anyway. Anything that depends on
-  // the response's render leg — including revalidatePath below and the client's
-  // router.refresh() — is unreliable here, so the returned value is the only
-  // thing the screen can trust. Re-reading makes it a report instead of a hope.
+  // RETRACTED 2026-08-27: an earlier version of this comment asserted, as
+  // MEASURED fact, that this route returns HTTP 503 on every role write. IT DOES
+  // NOT. Verified against PerformanceResourceTiming.responseStatus on three cold
+  // loads — the navigation entry and all 25 resource entries return 200, zero
+  // >=400. The 503s came from a network-monitoring extension's log. That is the
+  // second time in this program a monitoring artifact was mistaken for a fault;
+  // see nurock-devmgmt/docs/phantom-503-retraction.md.
+  //
+  // THE READ-BACK BELOW STAYS, on the independent ground stated above: the RPC is
+  // SECURITY DEFINER and authorises inside its own body, so a refusal comes back
+  // with no error. Re-reading makes it a report instead of a hope.
   const { data: after } = await sb
     .from("app_user_roles")
     .select("role_key")

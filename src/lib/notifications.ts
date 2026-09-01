@@ -52,7 +52,7 @@ export interface NotificationInput {
  *
  * Callers don't need to revalidate themselves — this function handles it.
  */
-export async function sendNotification(input: NotificationInput): Promise<void> {
+export async function sendNotification(input: NotificationInput): Promise<boolean> {
   const supabase = await createClient();
 
   const { error: insertErr } = await supabase.from("dm_notifications").insert({
@@ -68,7 +68,14 @@ export async function sendNotification(input: NotificationInput): Promise<void> 
   });
   if (insertErr) {
     console.error("[notifications] in-app insert failed:", insertErr.message);
-    return;
+    // Returns FALSE rather than throwing: a failed notification must never break
+    // the operation that triggered it (a draw approval, a sign-off). But the
+    // caller now has a way to KNOW it failed, which is what the weekly digest
+    // lacked — it reported the number of assignees it INTENDED to notify while
+    // every insert was being refused, so the job logged success and posted
+    // nothing for months. Callers that ignore this value behave exactly as
+    // before.
+    return false;
   }
 
   // The NotificationsBell lives in (app)/layout.tsx and re-fetches when the
@@ -87,14 +94,14 @@ export async function sendNotification(input: NotificationInput): Promise<void> 
   // Email path — no-op until IT finishes Resend domain setup.
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.RESEND_FROM;
-  if (!apiKey || !from) return;
+  if (!apiKey || !from) return true; // in-app write succeeded; email is optional
 
   const { data: appUser } = await supabase
     .from("app_users")
     .select("email, display_name")
     .eq("user_id", input.recipientUserId)
     .maybeSingle();
-  if (!appUser?.email) return;
+  if (!appUser?.email) return true; // in-app write succeeded; no address to email
 
   const linkBase = process.env.NEXT_PUBLIC_DEVMGMT_URL ?? "";
   const linkHref = input.href ? `${linkBase}${input.href}` : linkBase || null;
@@ -135,6 +142,9 @@ export async function sendNotification(input: NotificationInput): Promise<void> 
       (e as Error).message
     );
   }
+
+  // The in-app row is what "notified" means. Email is best-effort on top.
+  return true;
 }
 
 /**

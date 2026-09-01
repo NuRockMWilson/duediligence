@@ -22,6 +22,8 @@ interface OutstandingRow {
 
 export interface DigestResult {
   assigneesNotified: number;
+  /** Sends that were attempted and failed. Non-zero means the digest did NOT do its job. */
+  assigneesFailed: number;
   itemsCovered: number;
 }
 
@@ -40,7 +42,7 @@ export async function runDiligenceDigest(): Promise<DigestResult> {
   const rows = ((data ?? []) as OutstandingRow[]).filter(
     (r) => r.is_required && OUTSTANDING.has(r.status)
   );
-  if (rows.length === 0) return { assigneesNotified: 0, itemsCovered: 0 };
+  if (rows.length === 0) return { assigneesNotified: 0, assigneesFailed: 0, itemsCovered: 0 };
 
   const todayIso = new Date().toISOString().slice(0, 10);
 
@@ -78,7 +80,7 @@ export async function runDiligenceDigest(): Promise<DigestResult> {
   let itemsCovered = 0;
   // One notification per assignee. Deep-link to the deal when it's a single
   // deal; otherwise leave generic (the in-app feed lists per-deal links).
-  await Promise.all(
+  const sendResults = await Promise.all(
     Array.from(byAssignee.entries()).map(([userId, e]) => {
       itemsCovered += e.total;
       const dealList = Array.from(e.deals)
@@ -105,5 +107,30 @@ export async function runDiligenceDigest(): Promise<DigestResult> {
     })
   );
 
-  return { assigneesNotified: byAssignee.size, itemsCovered };
+  // COUNT WHAT ACTUALLY LANDED, not what was attempted.
+  //
+  // This previously returned byAssignee.size — the number of assignees the
+  // digest INTENDED to notify. sendNotification swallowed its insert error and
+  // returned void, so when the cron lost write access to dm_notifications the
+  // job kept reporting a healthy non-zero count while posting nothing at all.
+  // Measured 2026-09-01: has_table_privilege(anon, dm_notifications, insert) is
+  // FALSE, and Vercel Cron sends no cookies, so every send here has been failing
+  // silently. A job that reports success while doing nothing is worse than one
+  // that fails, because nobody goes looking.
+  const notified = sendResults.filter(Boolean).length;
+  const failed = sendResults.length - notified;
+  if (failed > 0) {
+    console.error(
+      "[diligence-digest] " +
+        failed +
+        " of " +
+        sendResults.length +
+        " notification(s) could not be written. The most likely cause is that " +
+        "this request has no authenticated session: Vercel Cron sends no " +
+        "cookies, so the Supabase client runs as 'anon', which holds no INSERT " +
+        "on dm_notifications."
+    );
+  }
+
+  return { assigneesNotified: notified, assigneesFailed: failed, itemsCovered };
 }
