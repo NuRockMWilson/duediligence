@@ -1,7 +1,7 @@
 "use server";
 
 // =============================================================================
-// Manual checklist-item editing — add / rename / retire / reorder
+// Manual checklist-item editing — add / rename / retire / restore / reorder
 // =============================================================================
 // WHY THIS EXISTS. Until now items could ONLY arrive by spreadsheet import.
 // createDiligenceTemplate makes a template with zero items and there was no way
@@ -27,7 +27,7 @@
 // app is for. This matches every existing action in actions.ts.
 //
 // -----------------------------------------------------------------------------
-// TWO SCHEMA FACTS SHAPE ALL FOUR ACTIONS. Neither is a preference.
+// TWO SCHEMA FACTS SHAPE THESE ACTIONS. Neither is a preference.
 // -----------------------------------------------------------------------------
 //   1. UNIQUE (template_id, item_number) is declared inline in 0081, so it is
 //      NOT DEFERRABLE. A straight two-row swap collides mid-statement. Hence the
@@ -461,6 +461,67 @@ export async function moveTemplateItem(input: {
     return {
       error: `Reorder half-applied — this item is parked at position ${parking}. ${s3.error.message}`,
     };
+  }
+
+  revalidateTemplates();
+  return {};
+}
+
+// -----------------------------------------------------------------------------
+// Restore
+// -----------------------------------------------------------------------------
+// A RETIRE YOU CANNOT UNDO IS A DELETE WITH EXTRA STEPS.
+//
+// Removal was made unconditional (see removeTemplateItem) because the catalog
+// table grants no DELETE. That was the right call, but it shipped without a way
+// back, and the live session found the consequence by running the acceptance
+// test I specified: retiring the test template's two original imported items,
+// then enumerating the drawer's whole control set and finding no restore. Their
+// words -- "the test template's original sample content is NOT recoverable from
+// the browser". Correct, and my omission.
+//
+// Restoring cannot collide on item_number: retiring never freed the number, and
+// addTemplateItem reads MAX including retired rows precisely so a later add
+// cannot occupy it. So this is a pure is_active flip.
+export async function restoreTemplateItem(input: {
+  itemId: string;
+}): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
+  const supabase = (await createClient()) as AnySb;
+
+  const { data: row } = await supabase
+    .from("nurock_diligence_items")
+    .select("id, title, template_id")
+    .eq("id", input.itemId)
+    .maybeSingle();
+  if (!row) return { error: "Item not found." };
+  const item = row as { id: string; title: string; template_id: string };
+
+  const { data: updated, error } = await supabase
+    .from("nurock_diligence_items")
+    .update({ is_active: true, updated_at: new Date().toISOString() })
+    .eq("id", input.itemId)
+    .select("id");
+  if (error) return { error: writeErrorMessage(error) };
+  if (!updated || (updated as unknown[]).length === 0) {
+    return {
+      error:
+        "The change didn't persist — no row was updated. Check row-level security on nurock_diligence_items.",
+    };
+  }
+
+  {
+    const authed = await createClient();
+    const {
+      data: { user },
+    } = await authed.auth.getUser();
+    await logDiligenceEvent(supabase, {
+      dealId: null,
+      actorUserId: user?.id ?? null,
+      eventType: "template_item_restored",
+      summary: `Restored checklist item "${item.title}"`,
+      detail: { templateId: item.template_id, itemId: input.itemId },
+    });
   }
 
   revalidateTemplates();

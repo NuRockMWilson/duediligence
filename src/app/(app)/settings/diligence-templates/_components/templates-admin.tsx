@@ -84,6 +84,7 @@ import {
   addTemplateItem,
   updateTemplateItem,
   removeTemplateItem,
+  restoreTemplateItem,
   moveTemplateItem,
 } from "../item-actions";
 
@@ -865,6 +866,20 @@ function DetailDrawer({
     else afterMutation();
   }
 
+  const [showRetired, setShowRetired] = React.useState(false);
+
+  async function restore(item: TemplateItemLite) {
+    setBusyItemId(item.id);
+    const res = await restoreTemplateItem({ itemId: item.id });
+    setBusyItemId(null);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success("Item restored.");
+    afterMutation();
+  }
+
   async function confirmRemoveItem() {
     const item = itemToRemove;
     if (!item) return;
@@ -1228,6 +1243,69 @@ function DetailDrawer({
                   <Plus className="w-3.5 h-3.5" />
                   Add an item
                 </button>
+              )}
+
+              {/* ---------------------------------------------------------
+                  RETIRED ITEMS — the way back.
+                  Removal is a retire, never a delete, and until this section
+                  existed a retired item was simply invisible with no restore
+                  control anywhere. The live session hit that on 2026-09-03:
+                  the acceptance test retired the test template's two original
+                  imported items and they could not be recovered from the UI.
+                  A retire you cannot undo is a delete with extra steps.
+                  Collapsed by default so the normal view stays the active list.
+                  --------------------------------------------------------- */}
+              {detail.retiredItems.length > 0 && (
+                <div className="pt-2">
+                  <button
+                    onClick={() => setShowRetired((v) => !v)}
+                    className="w-full text-left text-[11.5px] text-nurock-slate-light hover:text-nurock-navy inline-flex items-center gap-1.5"
+                  >
+                    {showRetired ? (
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    )}
+                    {detail.retiredItems.length} retired item
+                    {detail.retiredItems.length === 1 ? "" : "s"}
+                  </button>
+
+                  {showRetired && (
+                    <div className="mt-2 space-y-1.5">
+                      {detail.retiredItems.map((item) => (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between gap-2 rounded-md border border-dashed border-nurock-border bg-nurock-gray/40 px-3 py-2"
+                        >
+                          <div className="text-[12.5px] text-nurock-slate-light min-w-0">
+                            {item.code && (
+                              <span className="font-mono text-[11px] mr-1.5">
+                                {item.code}
+                              </span>
+                            )}
+                            <span className="line-through">{item.title}</span>
+                            <span className="ml-2 text-[10px]">
+                              {categoryLabel(item.category)}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => restore(item)}
+                            disabled={busyItemId === item.id}
+                            className="flex-shrink-0 inline-flex items-center gap-1 rounded border border-nurock-border px-2 py-0.5 text-[11px] text-nurock-slate hover:bg-white hover:text-nurock-navy disabled:opacity-40"
+                            title="Restore this item to the checklist"
+                          >
+                            {busyItemId === item.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <RotateCcw className="w-3 h-3" />
+                            )}
+                            Restore
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}

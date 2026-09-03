@@ -27,7 +27,8 @@ export type DiligenceAuditEventType =
   // table grants no DELETE (see removeTemplateItem). No row ever carried that
   // type — every attempted delete failed with a privilege error — so there is
   // nothing historical to keep it for.
-  | "template_item_retired";
+  | "template_item_retired"
+  | "template_item_restored";
 
 export interface DiligenceAuditEvent {
   /** Null for org-level events (e.g. template imports in Settings). */

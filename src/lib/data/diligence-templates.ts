@@ -56,7 +56,24 @@ export interface CrosswalkLink {
 
 export interface TemplateDetail {
   template: TemplateSummary;
+  /** ACTIVE items only, in item_number order. */
   items: TemplateItemLite[];
+  /**
+   * Retired items (is_active = false), so removal is not a one-way door.
+   *
+   * WHY THIS FIELD EXISTS. Removal is a retire, never a delete, and until now a
+   * retired item was simply invisible with no way back. The live session hit the
+   * consequence directly on 2026-09-03: running the acceptance test retired the
+   * test template's two original imported items, then enumerated the drawer's
+   * entire control set and found no restore — so sample data was unrecoverable
+   * from the UI. A retire you cannot undo is a delete with extra steps.
+   *
+   * DELIBERATELY A SEPARATE LIST rather than an is_active flag on `items`.
+   * `items` drives crosswalk mapping and the first/last disabling of the reorder
+   * controls; folding retired rows into it would change both of those by
+   * accident.
+   */
+  retiredItems: TemplateItemLite[];
   crosswalk: CrosswalkLink[];
 }
 
@@ -147,14 +164,16 @@ export async function getTemplateDetail(
     .maybeSingle();
   if (!t) return null;
 
+  // Fetch BOTH states in one query and partition below — the drawer needs the
+  // retired list to offer a restore, and a second round trip for it would be
+  // wasteful. `items` still means ACTIVE ONLY to every existing consumer.
   const { data: items } = await supabase
     .from("nurock_diligence_items")
     .select("id, item_number, code, category, title, description, item_type, is_active")
     .eq("template_id", templateId)
-    .eq("is_active", true)
     .order("item_number", { ascending: true });
 
-  const itemRows = ((items ?? []) as Array<{
+  const allRows = (items ?? []) as Array<{
     id: string;
     item_number: number | null;
     code: string | null;
@@ -162,7 +181,10 @@ export async function getTemplateDetail(
     title: string;
     description: string | null;
     item_type: string;
-  }>).map((i) => ({
+    is_active: boolean;
+  }>;
+
+  const toLite = (i: (typeof allRows)[number]): TemplateItemLite => ({
     id: i.id,
     itemNumber: i.item_number,
     code: i.code,
@@ -170,7 +192,10 @@ export async function getTemplateDetail(
     title: i.title,
     description: i.description,
     itemType: i.item_type,
-  }));
+  });
+
+  const itemRows = allRows.filter((i) => i.is_active).map(toLite);
+  const retiredRows = allRows.filter((i) => !i.is_active).map(toLite);
 
   // Crosswalk rows touching this template's items (external side).
   const externalItemIds = itemRows.map((i) => i.id);
@@ -205,6 +230,7 @@ export async function getTemplateDetail(
       itemCount: itemRows.length,
     },
     items: itemRows,
+    retiredItems: retiredRows,
     crosswalk,
   };
 }
