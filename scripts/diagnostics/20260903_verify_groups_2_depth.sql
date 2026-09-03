@@ -74,6 +74,15 @@ BEGIN
     END IF;
   END;
 
-  RAISE EXCEPTION E'\n=== 2/4 DEPTH: % failed of 5 ===%\n=== END. This error is INTENTIONAL and rolls back the throwaway template. ===',
-    fails, msg;
+  -- VERDICT FIRST. The previous wording put "2/4 DEPTH: 0 failed of 5" behind a
+  -- Postgres ERROR header, and a passing run was therefore read as a failure —
+  -- correctly, given what it looked like. A report whose success and failure
+  -- look the same is the defect this whole exercise keeps finding, so the first
+  -- line now states the outcome in words before any detail.
+  RAISE EXCEPTION E'\n%\n%\n(end of 2/4 DEPTH)',
+    CASE WHEN fails = 0
+      THEN '*** SCRIPT 2 OF 4: ALL 5 CHECKS PASSED. The Postgres error you are reading IS the intended rollback — nothing was written. ***'
+      ELSE format('*** SCRIPT 2 OF 4: %s OF 5 CHECKS FAILED. Read the FAIL lines below. ***', fails)
+    END,
+    msg;
 END $$;

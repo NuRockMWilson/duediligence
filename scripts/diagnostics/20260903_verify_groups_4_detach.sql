@@ -92,6 +92,11 @@ BEGIN
   -- Not counted as a failure: 59 is the seeded number, and a deliberate
   -- addition would legitimately change it. Reported so a SURPRISE is visible.
 
-  RAISE EXCEPTION E'\n=== 4/4 DETACH: % failed of 5 (+1 informational) ===%\n=== END. This error is INTENTIONAL and rolls back the throwaway template. ===',
-    fails, msg;
+  -- VERDICT FIRST — see the note in script 2.
+  RAISE EXCEPTION E'\n%\n%\n(end of 4/4 DETACH)',
+    CASE WHEN fails = 0
+      THEN '*** SCRIPT 4 OF 4: ALL 5 CHECKS PASSED (plus 1 informational line). The Postgres error you are reading IS the intended rollback — nothing was written. ***'
+      ELSE format('*** SCRIPT 4 OF 4: %s OF 5 CHECKS FAILED. Read the FAIL lines below. ***', fails)
+    END,
+    msg;
 END $$;

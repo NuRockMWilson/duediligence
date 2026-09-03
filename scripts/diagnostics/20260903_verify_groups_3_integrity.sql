@@ -127,6 +127,12 @@ BEGIN
     msg := msg || format(E'\nPASS  8 blank label is refused');
   END;
 
-  RAISE EXCEPTION E'\n=== 3/4 INTEGRITY: % failed of 8 ===%\n=== END. This error is INTENTIONAL and rolls back both throwaway templates. ===',
-    fails, msg;
+  -- VERDICT FIRST — see the note in script 2. A passing run must not read as a
+  -- failure just because the rollback mechanism is an exception.
+  RAISE EXCEPTION E'\n%\n%\n(end of 3/4 INTEGRITY)',
+    CASE WHEN fails = 0
+      THEN '*** SCRIPT 3 OF 4: ALL 8 CHECKS PASSED. The Postgres error you are reading IS the intended rollback — nothing was written. ***'
+      ELSE format('*** SCRIPT 3 OF 4: %s OF 8 CHECKS FAILED. Read the FAIL lines below. ***', fails)
+    END,
+    msg;
 END $$;
