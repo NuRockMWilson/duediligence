@@ -639,6 +639,50 @@ export async function getDiligenceDocSignedUrl(input: {
   expiresInSeconds?: number;
 }): Promise<{ signedUrl?: string; error?: string }> {
   await assertDiligenceCan("view");
+
+  // ---------------------------------------------------------------------------
+  // PATH-LEVEL CHECK. The guard above is MODULE-level -- "may this user use
+  // diligence at all" -- while this action accepts an ARBITRARY filePath. Those
+  // are different questions, and without this a diligence viewer could mint a
+  // signed URL for a document on a deal they cannot reach.
+  //
+  // Flagged in 20260831_diligence_storage_policies.sql, which noted that storage
+  // RLS becomes "a genuine improvement over none" but that under the SharePoint
+  // provider (app-only Graph credentials, Sites.ReadWrite.All) it "remains a
+  // complete bypass, because those requests never touch storage.objects". That
+  // is still true: the RLS backstop is provider-dependent and this check is not.
+  //
+  // WHY A `deals` SELECT RATHER THAN dm_user_has_access. The deals_select policy
+  // is already the platform's definition of "can this user reach this deal" --
+  // owner OR org admin OR deal_access grant. Reading through it means this
+  // cannot drift from that rule, whereas an RPC call would be a second
+  // implementation of the same concept, which is the defect class this codebase
+  // keeps producing. If the row comes back, the caller can reach the deal.
+  //
+  // The deal id is the FIRST path segment for every provider
+  // (lib/diligence/storage.ts:27, `{dealId}/{dealItemId}/{uuid}{ext}`) -- the
+  // same segment the storage policies read via (storage.foldername(name))[1].
+  // ---------------------------------------------------------------------------
+  const dealId = (input.filePath ?? "").split("/")[0]?.trim();
+  if (!dealId) {
+    return { error: "That document path is missing its deal, so access can't be checked." };
+  }
+  const supabase = await createClient();
+  const { data: reachable, error: reachErr } = await supabase
+    .from("deals")
+    .select("id")
+    .eq("id", dealId)
+    .maybeSingle();
+  // FAIL CLOSED on an error. An unreadable check is not a passed check -- the
+  // same mistake that let deriveStatusFromChain wipe an approval from three
+  // reads it never error-checked (827bbf2).
+  if (reachErr) {
+    return { error: `Couldn't verify access to that deal: ${reachErr.message}` };
+  }
+  if (!reachable) {
+    return { error: "You don't have access to that deal." };
+  }
+
   try {
     const signedUrl = await getStorageProvider().signedUrl(
       input.filePath,
