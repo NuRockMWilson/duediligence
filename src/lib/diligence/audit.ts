@@ -23,7 +23,10 @@ export type DiligenceAuditEventType =
   // can filter on later.
   | "template_item_added"
   | "template_item_updated"
-  | "template_item_deleted"
+  // No "template_item_deleted": removal is always a retire, because the catalog
+  // table grants no DELETE (see removeTemplateItem). No row ever carried that
+  // type — every attempted delete failed with a privilege error — so there is
+  // nothing historical to keep it for.
   | "template_item_retired";
 
 export interface DiligenceAuditEvent {

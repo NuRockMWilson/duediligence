@@ -1,8 +1,10 @@
-// @ts-nocheck — vitest isn't installed in this project yet (test imports
-// won't resolve). Keeping this file as a runnable spec for when a test
-// runner gets added; the ts-nocheck directive prevents tsc from failing
-// the build in the meantime. Math has been verified manually against the
-// Foxcroft Workbook (see git history of this file's introduction).
+// A TEST RUNNER EXISTS NOW. The @ts-nocheck this file carried from 2026-05-28
+// to 2026-09-03 — "vitest isn't installed in this project yet" — has been
+// removed along with the condition that justified it. See vitest.config.ts for
+// why the runner landed. Until then this was a spec that had never once
+// executed, and enabling it immediately surfaced one stale expectation (see the
+// 100.00% note below): a test that cannot run is not coverage, in the same way
+// a check that cannot fail is not coverage.
 // =============================================================================
 // Phase 5 r2 — eligibility calc engine tests
 // =============================================================================
@@ -98,7 +100,12 @@ describe("computePeriodSpreadEligibility — RE taxes", () => {
     expect(r.eligibleAmount).toBe(12000);
     expect(r.ineligibleAmount).toBe(0);
     expect(r.methodology).toMatch(/re_taxes/);
-    expect(r.methodology).toMatch(/100%/);
+    // "100.00%", not "100%": the methodology string is built with toFixed(2)
+    // (index.ts:256), which matches NuRock's house percentage format. This
+    // assertion was written 2026-05-28 against a one-decimal string and has
+    // never executed until a test runner was wired up on 2026-09-03 — the
+    // formatter is right and the never-run expectation was stale.
+    expect(r.methodology).toMatch(/100\.00%/);
   });
 
   it("$12,000 tax bill covering pre-closing + post-CO is mixed", () => {

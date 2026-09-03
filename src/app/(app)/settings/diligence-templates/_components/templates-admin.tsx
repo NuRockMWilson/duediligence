@@ -851,6 +851,9 @@ function DetailDrawer({
       return;
     }
     setEditingId(null);
+    // A rename used to commit SILENTLY — the live session flagged that add
+    // toasted and edit did not, leaving no signal that the change persisted.
+    toast.success("Item updated.");
     afterMutation();
   }
 
@@ -873,18 +876,18 @@ function DetailDrawer({
       toast.error(res.error);
       return;
     }
-    // The two outcomes are genuinely different and the user must be told which
-    // happened: a RETIRED item leaves this template but stays on every deal
-    // already tracking it (0081 forbids hard-deleting a referenced item so live
-    // tracking is never orphaned). Reporting "deleted" for both would be a lie.
-    if (res.outcome === "retired") {
+    // Removal is ALWAYS a retire (the catalog table grants no DELETE — see the
+    // note in removeTemplateItem). The item leaves this checklist either way,
+    // so the only thing worth distinguishing is whether any deal is still
+    // tracking it, because that is what the reader has to care about.
+    if (res.dealRefs && res.dealRefs > 0) {
       toast.success(
-        `Item retired. It stays on ${res.dealRefs} deal checklist${
+        `Item removed from this checklist. It stays on ${res.dealRefs} deal item${
           res.dealRefs === 1 ? "" : "s"
         } already tracking it.`
       );
     } else {
-      toast.success("Item deleted.");
+      toast.success("Item removed.");
     }
     afterMutation();
   }
@@ -1231,16 +1234,16 @@ function DetailDrawer({
         </div>
       </SheetContent>
 
-      {/* Retire / delete confirmation. The copy cannot promise which of the two
-          happens, because that depends on whether a deal already tracks the
-          item — the action decides and reports back. */}
+      {/* Removal confirmation. The copy says "removed from this checklist"
+          rather than "deleted", because that is exactly what happens: the item
+          is retired, so any deal already tracking it keeps its history. */}
       <ConfirmDialog
         open={!!itemToRemove}
         onOpenChange={(o) => !o && setItemToRemove(null)}
         title="Remove this checklist item?"
         description={
           itemToRemove
-            ? `"${itemToRemove.title}" will be removed from this checklist. If any deal is already tracking it, the item is retired instead of deleted so that deal keeps its history.`
+            ? `"${itemToRemove.title}" will be removed from this checklist. Any deal already tracking it keeps the item and its history.`
             : ""
         }
         confirmLabel="Remove item"

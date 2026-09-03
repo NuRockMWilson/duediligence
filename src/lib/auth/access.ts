@@ -301,7 +301,19 @@ export async function isRbacInitialized(): Promise<boolean> {
       }
     ).rpc("app_rbac_initialized");
     if (error) throw error;
-    return data === true;
+    // ONLY AN EXPLICIT `false` ESTABLISHES "NOT INITIALIZED".
+    //
+    // This was `data === true` until a unit test caught it (access.test.ts,
+    // 2026-09-03), and the difference is not cosmetic: `data === true` maps a
+    // NULL answer to false, which DISABLES THE GATE. That is the very defect
+    // this function was rewritten to fix, reintroduced in a narrower costume —
+    // RPC present, answering null, door open. A null is "cannot establish",
+    // and cannot-establish must enforce.
+    //
+    // Written as `!== false` rather than a truthiness check so a future change
+    // that has the RPC return a COUNT cannot resurrect the original bug either:
+    // 0 !== false, so a zero-row count still enforces.
+    return data !== false;
   } catch {
     // FAIL CLOSED. See the note above: only a caller who is already `denied`
     // reaches this, so treating an unanswerable question as "enforce" cannot

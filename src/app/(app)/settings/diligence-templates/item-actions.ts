@@ -32,13 +32,16 @@
 //   1. UNIQUE (template_id, item_number) is declared inline in 0081, so it is
 //      NOT DEFERRABLE. A straight two-row swap collides mid-statement. Hence the
 //      three-step move in moveTemplateItem.
-//   2. dm_diligence_deal_items.item_id REFERENCES nurock_diligence_items(id)
-//      with NO ON DELETE CASCADE, and 0081 states items are "retired via
-//      is_active=false, never hard-deleted while deals reference them (prevents
-//      orphaning live deal tracking)". So "delete" is a RETIRE whenever a deal
-//      tracks the item. getTemplateDetail filters on is_active, so a retired
-//      item leaves the template UI while the deal keeps its history — that
-//      asymmetry is correct, not a bug.
+//   2. NOTHING IS EVER HARD-DELETED. nurock_diligence_items carries a permissive
+//      RLS policy and NO GRANT, so `authenticated` has no DELETE privilege at
+//      all — measured live as "permission denied for table
+//      nurock_diligence_items" in a session where add and rename had just
+//      succeeded. Removal is therefore always is_active=false, which also
+//      honours 0081's rule that items are "retired ... never hard-deleted while
+//      deals reference them (prevents orphaning live deal tracking)".
+//      getTemplateDetail filters on is_active, so a retired item leaves the
+//      template UI while any deal tracking it keeps its history — that asymmetry
+//      is correct, not a bug.
 // =============================================================================
 
 import { revalidatePath } from "next/cache";
@@ -51,6 +54,35 @@ type AnySb = any;
 
 function revalidateTemplates() {
   revalidatePath("/settings/diligence-templates");
+}
+
+/**
+ * Turn a Postgres write failure into a sentence a person can act on.
+ *
+ * MEASURED 2026-09-03: a failed delete surfaced to the user as the toast
+ * "permission denied for table nurock_diligence_items" — a raw driver string
+ * that names an internal table and reads as a crash rather than a refusal. The
+ * live session flagged it as a second defect alongside the failure itself, and
+ * it is the same problem the export work already solved: a refusal has to arrive
+ * as a sentence, or a guard firing and a bug look identical from the outside.
+ *
+ * The raw message is still returned for anything unrecognised — inventing
+ * friendly copy for an unknown fault would hide information the next
+ * investigation needs. Only the two shapes with a known cause are translated.
+ */
+function writeErrorMessage(error: { message?: string; code?: string }): string {
+  const raw = error.message ?? "Unknown database error.";
+  if (/permission denied for table/i.test(raw)) {
+    return (
+      "The database refused this change — the app is missing a privilege on the " +
+      "checklist catalog. Nothing was changed. Please report this; it needs a " +
+      "grant, not a retry."
+    );
+  }
+  if (error.code === "23505" || /duplicate key|unique constraint/i.test(raw)) {
+    return "That position is already taken — reload the checklist and try again.";
+  }
+  return raw;
 }
 
 /** Rows of dm_diligence_deal_items pointing at this catalog item. */
@@ -116,7 +148,7 @@ export async function addTemplateItem(input: {
     })
     .select("id")
     .single();
-  if (error) return { error: error.message };
+  if (error) return { error: writeErrorMessage(error) };
 
   // ADDING TO THE CANONICAL TEMPLATE IS NOT A LOCAL EDIT. ensureDealItems()
   // instantiates every active canonical item on every adopting deal at the next
@@ -196,7 +228,7 @@ export async function updateTemplateItem(input: {
     })
     .eq("id", input.itemId)
     .select("id");
-  if (error) return { error: error.message };
+  if (error) return { error: writeErrorMessage(error) };
   if (!updated || (updated as unknown[]).length === 0) {
     return {
       error:
@@ -231,12 +263,14 @@ export async function updateTemplateItem(input: {
 }
 
 // -----------------------------------------------------------------------------
-// Retire (or delete, when nothing references it)
+// Retire
 // -----------------------------------------------------------------------------
 export async function removeTemplateItem(input: {
   itemId: string;
 }): Promise<{
-  outcome?: "deleted" | "retired";
+  /** Always "retired" — see the note in the body on why nothing is deleted. */
+  outcome?: "retired";
+  /** Deal rows still tracking the item; 0 means it left the system cleanly. */
   dealRefs?: number;
   error?: string;
 }> {
@@ -251,32 +285,50 @@ export async function removeTemplateItem(input: {
   if (!row) return { error: "Item not found." };
   const item = row as { id: string; title: string; template_id: string };
 
-  // THE BRANCH IS THE WHOLE POINT. A hard delete of a referenced item fails on
-  // the FK — and if that FK were ever loosened it would orphan live deal
-  // tracking instead — so it is only attempted when nothing references the row.
-  // The outcome is RETURNED, not inferred, so the UI can tell the user which of
-  // the two things actually happened to their item.
+  // ---------------------------------------------------------------------------
+  // ALWAYS A RETIRE. NEVER A HARD DELETE.
+  // ---------------------------------------------------------------------------
+  // The first version of this action hard-deleted when nothing referenced the
+  // item. MEASURED LIVE 2026-09-03 on the retired test template: every such
+  // delete failed with
+  //
+  //     permission denied for table nurock_diligence_items
+  //
+  // as org admin, in a session where add / rename / reorder had just succeeded.
+  // That error is a PRIVILEGE error, not row security, and 0081 explains it: the
+  // table has `CREATE POLICY nurock_diligence_items_all ... FOR ALL USING (true)`
+  // and NO GRANT anywhere in the migration history. A policy never confers a
+  // privilege — a permissive FOR ALL policy is inert without a table-level
+  // grant — so `authenticated` holds SELECT/INSERT/UPDATE here and not DELETE.
+  //
+  // THE FIX IS TO STOP DELETING, NOT TO GRANT DELETE. Adding a DELETE privilege
+  // on an org-wide catalog table to close a cosmetic gap would widen the write
+  // surface on the very class of table this program has spent weeks narrowing
+  // (cost_account_map, gl_to_format_line), and it would need a migration to do
+  // it. Retiring achieves the whole user-visible goal — getTemplateDetail
+  // filters is_active, so the item leaves the template either way — using a
+  // privilege the app already holds and needing nothing from anyone.
+  //
+  // It is also the better record. 0081's own comment says catalog items are
+  // "retired via is_active=false, never hard-deleted while deals reference
+  // them"; making that unconditional means the catalog keeps its history and a
+  // referenced row can never be orphaned by a future change to the reference
+  // count. The deal-reference count is still read, but only to say the right
+  // thing to the user.
+  // ---------------------------------------------------------------------------
   const refs = await dealRefCount(supabase, input.itemId);
 
-  if (refs === 0) {
-    const { error } = await supabase
-      .from("nurock_diligence_items")
-      .delete()
-      .eq("id", input.itemId);
-    if (error) return { error: error.message };
-  } else {
-    const { data: updated, error } = await supabase
-      .from("nurock_diligence_items")
-      .update({ is_active: false, updated_at: new Date().toISOString() })
-      .eq("id", input.itemId)
-      .select("id");
-    if (error) return { error: error.message };
-    if (!updated || (updated as unknown[]).length === 0) {
-      return {
-        error:
-          "The change didn't persist — no row was updated. Check row-level security on nurock_diligence_items.",
-      };
-    }
+  const { data: updated, error } = await supabase
+    .from("nurock_diligence_items")
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .eq("id", input.itemId)
+    .select("id");
+  if (error) return { error: writeErrorMessage(error) };
+  if (!updated || (updated as unknown[]).length === 0) {
+    return {
+      error:
+        "The change didn't persist — no row was updated. Check row-level security on nurock_diligence_items.",
+    };
   }
 
   {
@@ -287,10 +339,13 @@ export async function removeTemplateItem(input: {
     await logDiligenceEvent(supabase, {
       dealId: null,
       actorUserId: user?.id ?? null,
-      eventType: refs === 0 ? "template_item_deleted" : "template_item_retired",
+      eventType: "template_item_retired",
+      // The refs count stays in the summary because it is the part a reader
+      // cares about later: whether retiring this item left live deal tracking
+      // pointing at it. The ACTION is the same either way now.
       summary:
         refs === 0
-          ? `Deleted checklist item "${item.title}" (unused)`
+          ? `Retired checklist item "${item.title}" (not tracked on any deal)`
           : `Retired checklist item "${item.title}" (still tracked on ${refs} deal item${
               refs === 1 ? "" : "s"
             })`,
@@ -303,7 +358,7 @@ export async function removeTemplateItem(input: {
   }
 
   revalidateTemplates();
-  return { outcome: refs === 0 ? "deleted" : "retired", dealRefs: refs };
+  return { outcome: "retired", dealRefs: refs };
 }
 
 // -----------------------------------------------------------------------------
@@ -375,7 +430,7 @@ export async function moveTemplateItem(input: {
     .update({ item_number: parking, updated_at: stamp })
     .eq("id", me.id)
     .select("id");
-  if (s1.error) return { error: s1.error.message };
+  if (s1.error) return { error: writeErrorMessage(s1.error) };
   if (!s1.data || (s1.data as unknown[]).length === 0) {
     return {
       error:
@@ -394,7 +449,7 @@ export async function moveTemplateItem(input: {
       .from("nurock_diligence_items")
       .update({ item_number: me.item_number, updated_at: stamp })
       .eq("id", me.id);
-    return { error: s2.error.message };
+    return { error: writeErrorMessage(s2.error) };
   }
 
   const s3 = await supabase

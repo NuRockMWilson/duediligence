@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "node scripts/check-shared-ui.mjs && node scripts/server-action-guard-check.mjs && next build",
     "start": "next start",
+    "test": "vitest run",
     "lint": "eslint",
     "check:shared-ui": "node scripts/check-shared-ui.mjs",
     "check:paths": "node scripts/no-bare-fetch-check.mjs",
@@ -44,6 +45,7 @@
     "eslint-config-next": "16.2.4",
     "supabase": "^2.98.2",
     "tailwindcss": "^4",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
   }
 }
