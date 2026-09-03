@@ -705,13 +705,13 @@ export function DiligenceShell({
         <div className="flex flex-col md:flex-row md:items-center gap-6">
           <div className="flex items-center gap-4">
             <CircularProgress
-              value={rollup.coveragePct}
+              value={rollup.coveragePct ?? 0}
               max={100}
               size={92}
               tone={ringTone}
               label={
                 <div className="font-display text-[24px] font-bold leading-none tabular-nums text-nurock-black">
-                  {rollup.coveragePct}%
+                  {rollup.coveragePct == null ? "—" : `${rollup.coveragePct}%`}
                 </div>
               }
               sublabel={
@@ -911,7 +911,7 @@ export function DiligenceShell({
                       </div>
                       <div className="flex items-center gap-1.5">
                         <Badge tone={STATUS_BADGE_BY_TONE[tone]}>
-                          {f.coveragePct}%
+                          {f.coveragePct == null ? "—" : `${f.coveragePct}%`}
                         </Badge>
                         <button
                           onClick={() => runFinancierExport(f.templateId)}
@@ -939,7 +939,7 @@ export function DiligenceShell({
                     <div className="mt-2 relative h-2 overflow-hidden rounded-full bg-[#F2F4F7]">
                       <div
                         className={`h-full transition-[width] duration-500 ${READINESS_BAR[tone]}`}
-                        style={{ width: `${f.coveragePct}%` }}
+                        style={{ width: `${f.coveragePct ?? 0}%` }}
                       />
                     </div>
                     <div className="mt-2 flex items-center justify-between text-[11px] text-nurock-slate-light">

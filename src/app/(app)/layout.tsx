@@ -49,5 +49,31 @@ export default async function AppLayout({
     redirect("/no-access");
   }
 
-  return <>{children}</>;
+  // -------------------------------------------------------------------------
+  // BUILD MARKER — so a verification session can tell WHICH build it tested.
+  // -------------------------------------------------------------------------
+  // MEASURED PROBLEM, 2026-09-03: the live session found an entire new
+  // "Investor & Lender Packets" section on the Westview deal page that had been
+  // absent from its round-39 read of the same page. It could establish that the
+  // app changed underneath it but not WHICH build it had measured, because this
+  // app stamped nothing — [data-build] was null on every deal page and on
+  // /settings/diligence-templates, with no meta fallback. That cost a real
+  // attribution: a deploy landed mid-round and could not be tied to a commit.
+  //
+  // devmgmt has carried this marker since 2026-08-25 for the same reason. This
+  // is the port, deliberately identical so one DOM query works in both apps:
+  //     document.querySelector("[data-build]").dataset.build
+  //
+  // A DATA ATTRIBUTE, NOT VISIBLE CHROME. Nothing renders, nothing moves, no
+  // design decision is implied.
+  //
+  // NO NEW ENVIRONMENT VARIABLE, deliberately — env changes are out of scope on
+  // this project. VERCEL_GIT_COMMIT_SHA is already injected by the platform and
+  // is read HERE, in a server component, so it never needs the NEXT_PUBLIC_
+  // prefix that would make it a config change. Locally it is absent and the
+  // marker reads "dev", which is itself the correct answer.
+  // -------------------------------------------------------------------------
+  const buildSha = (process.env.VERCEL_GIT_COMMIT_SHA ?? "dev").slice(0, 7);
+
+  return <div data-build={buildSha}>{children}</div>;
 }

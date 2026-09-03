@@ -49,7 +49,14 @@ export function varianceTone(absDollarDelta: number): ToneKey {
 // Coverage / readiness % tone — used by the due-diligence readiness KPIs and
 // any other completeness gauge. >=90 reads "done", 60–89 "in progress", <60
 // "behind". Mirrors the locked ok/warn/bad scale above.
-export function coverageTone(pct: number): ToneKey {
+//
+// NULL MEANS "UNDEFINED OVER AN EMPTY SET", NOT ZERO, and it is deliberately
+// `muted` rather than `bad`. Coverage of an empty packet has no value — see the
+// note on financierCoverage in lib/data/diligence-rollup.ts. Colouring it red
+// would assert the opposite error to the one just fixed (nothing collected is
+// not the same as nothing required), so an undefined ratio reads as absent.
+export function coverageTone(pct: number | null): ToneKey {
+  if (pct == null) return "muted";
   if (pct >= 90) return "ok";
   if (pct >= 60) return "warn";
   return "bad";

@@ -167,7 +167,14 @@ export default async function DealsPage() {
                     </div>
                     {(() => {
                       const dd = readinessByDeal.get(deal.id);
-                      if (!dd || dd.total === 0) return null;
+                      // coveragePct == null means nothing is APPLICABLE (every
+                      // item waived/N/A) — distinct from total === 0, which
+                      // means nothing is instantiated. Neither has a readiness
+                      // figure, and on a compact portfolio card the honest
+                      // presentation of an undefined ratio is to omit the strip
+                      // rather than print "—%" with an empty bar.
+                      if (!dd || dd.total === 0 || dd.coveragePct == null)
+                        return null;
                       const tone = coverageTone(dd.coveragePct);
                       return (
                         <div className="mt-2.5">

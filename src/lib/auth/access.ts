@@ -247,24 +247,69 @@ export async function claimPendingInvite(): Promise<boolean> {
  * this to stay BOOTSTRAP-SAFE: if nobody has been assigned a role (e.g. the
  * migration/backfill hasn't run), enforcement stays off so the app can't lock
  * everyone out. Once at least one assignment exists, the gate enforces.
+ *
+ * =============================================================================
+ * THIS FUNCTION DISABLED THE MODULE GATE FOR EXACTLY THE USERS IT WAS MEANT TO
+ * KEEP OUT. The identical defect was measured in nurock-devmgmt on 2026-09-02
+ * and fixed there; THIS COPY WAS STILL THE BROKEN VERSION until 2026-09-03.
+ * =============================================================================
+ * It COUNTED app_user_roles through the caller's own session — createClient()
+ * is the anon key plus that user's cookie, so RLS applies. And 0077's policy is:
+ *
+ *     app_user_roles_sel: USING (user_id = auth.uid() OR app_is_org_admin(...))
+ *
+ * So a user with NO roles and no admin bit sees ZERO rows. count = 0. This
+ * returned false. The layout's `if (denied && await isRbacInitialized())` became
+ * `denied && false`, never redirected, and served every route under (app).
+ *
+ * THE SHAPE IS THE ONE THIS CODEBASE KEEPS PRODUCING: a guard's own precondition
+ * evaluated through the permissions of the user being guarded. It is worse than
+ * a plain missing check because it is SELF-REINFORCING — the less access you
+ * have, the more certainly the gate switches itself off. An org admin, who can
+ * read every row, is the one caller for whom it always answered correctly, so it
+ * looked right to everyone able to test it.
+ *
+ * AND IT WAS WORSE HERE THAN IN DEVMGMT, because this gate is deliberately the
+ * WIDER of the two — canEnter() admits a diligence role OR a devmgmt role OR
+ * org admin — so the set of callers who reach this branch is precisely the set
+ * with no role anywhere in the platform.
+ *
+ * THE FIX IS A SECURITY DEFINER RPC, the pattern 0079 already established for
+ * exactly this class of question (app_can and app_is_org_admin both run definer
+ * to avoid recursing through the policies they inform).
+ *
+ * AND THE FALLBACK IS NOW DENY, NOT ALLOW. If the RPC is absent — migration
+ * 20260902_app_rbac_initialized.sql not yet applied — we cannot establish that
+ * RBAC is uninitialized, and "cannot establish" must not read as "is
+ * uninitialized". Denying is safe for everyone who should have access: a
+ * role-holder or an org admin never reaches this branch, because `denied` is
+ * already false for them. Only a roleless caller gets here, and refusing them
+ * IS the fix.
+ *
+ * This does NOT contradict the standing rule against denying by default on an
+ * unseeded control. That rule is about data that has not been populated yet.
+ * Here the data IS populated — roles exist — and the fail-open was firing not on
+ * "no roles exist" but on "you cannot see the roles that exist". Those are
+ * different conditions, and the bootstrap exception never covered the second.
  */
 export async function isRbacInitialized(): Promise<boolean> {
   const supabase = await createClient();
   try {
-    const { count } = await (
+    const { data, error } = await (
       supabase as unknown as {
-        from: (t: string) => {
-          select: (
-            c: string,
-            opts: { count: "exact"; head: true }
-          ) => Promise<{ count: number | null }>;
-        };
+        rpc: (fn: string) => Promise<{ data: boolean | null; error: unknown }>;
       }
-    )
-      .from("app_user_roles")
-      .select("user_id", { count: "exact", head: true });
-    return (count ?? 0) > 0;
+    ).rpc("app_rbac_initialized");
+    if (error) throw error;
+    return data === true;
   } catch {
-    return false; // table missing / error → treat as uninitialized (no gate)
+    // FAIL CLOSED. See the note above: only a caller who is already `denied`
+    // reaches this, so treating an unanswerable question as "enforce" cannot
+    // lock out anyone who holds a role.
+    console.warn(
+      "[access] app_rbac_initialized() unavailable — enforcing the module gate. " +
+        "Apply nurock-devmgmt/supabase/migrations/20260902_app_rbac_initialized.sql."
+    );
+    return true;
   }
 }

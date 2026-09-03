@@ -41,8 +41,9 @@ export interface DiligenceRollup {
   outstandingCount: number;
   /** Items past due that aren't approved/waived/na. */
   overdueCount: number;
-  /** approved / applicable * 100 (100 when nothing is applicable). */
-  coveragePct: number;
+  /** approved / applicable * 100, or NULL when nothing is applicable —
+   *  undefined over an empty set, never 100. See the note at the computation. */
+  coveragePct: number | null;
   allClear: boolean;
   byAssignee: DiligenceAssigneeLoad[];
 }
@@ -105,8 +106,12 @@ export function computeDiligenceRollup(
   }
 
   const outstandingCount = Math.max(applicable - approved, 0);
+  // NULL, NOT 100, WHEN THE DENOMINATOR IS EMPTY. See the long note on the
+  // financier computation below — same defect, same reasoning. Reachable here
+  // only by waiving/N/A-ing every instantiated item on a deal, which the
+  // waived_reason CHECK makes deliberate but does not make "ready".
   const coveragePct =
-    applicable === 0 ? 100 : Math.round((approved / applicable) * 100);
+    applicable === 0 ? null : Math.round((approved / applicable) * 100);
 
   return {
     total: rows.length,
@@ -187,7 +192,8 @@ export async function getDiligenceRollup(
 }
 
 export interface DealReadiness {
-  coveragePct: number;
+  /** NULL when nothing is applicable — see DiligenceRollup.coveragePct. */
+  coveragePct: number | null;
   outstandingCount: number;
   overdueCount: number;
   total: number;
@@ -271,7 +277,9 @@ export interface FinancierCoverage {
   total: number;
   satisfied: number;
   unmappedCount: number;
-  coveragePct: number;
+  /** satisfied / total * 100, or NULL when the packet has NO items. An empty
+   *  packet's coverage is undefined, not complete. */
+  coveragePct: number | null;
   /** Per-item detail — powers the per-financier packet export (the lender's own
    *  item list with satisfied state). Aggregate consumers can ignore it. */
   items: FinancierCoverageItem[];
@@ -416,7 +424,30 @@ export async function getDiligenceFinancierCoverage(
         total,
         satisfied,
         unmappedCount: unmapped,
-        coveragePct: total === 0 ? 100 : Math.round((satisfied / total) * 100),
+        // ---------------------------------------------------------------
+        // NULL, NOT 100. A BADGE THAT CANNOT FAIL IS NOT A MEASUREMENT.
+        // ---------------------------------------------------------------
+        // MEASURED LIVE 2026-09-03. Residences at Westview Landing had exactly
+        // one adopted packet — "PNC Bank - Equity" — with no items in it, and
+        // this expression returned total=0, satisfied=0, coveragePct=100. The
+        // deal page rendered "PNC Bank / INVESTOR / 100% / 0/0 items
+        // satisfied", telling the CFO that PNC's diligence was fully covered on
+        // a deal where nothing had been collected for PNC at all.
+        //
+        // An empty packet can never be below 100% under the old expression, so
+        // the number could not come out wrong — which is precisely why it was
+        // worthless. This program has now produced that shape enough times to
+        // name it: a check whose denominator it also controls cannot falsify
+        // itself. Coverage over an empty set is UNDEFINED, not COMPLETE.
+        //
+        // The honest value is null, rendered "—". Consumers colour it `muted`
+        // (coverageTone(null)) rather than red, because "nothing is required
+        // yet" must not read as "nothing has been done" either.
+        //
+        // EXPECT A DROP TO 0% THE FIRST TIME AN ITEM IS ADDED to a packet that
+        // has been sitting at "—". That is not a regression; it is the figure
+        // becoming meaningful.
+        coveragePct: total === 0 ? null : Math.round((satisfied / total) * 100),
         items: detailItems,
       };
     })

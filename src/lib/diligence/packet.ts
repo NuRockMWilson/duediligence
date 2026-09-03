@@ -30,6 +30,18 @@ import type {
   FinancierCoverageItem,
 } from "@/lib/data/diligence-rollup";
 
+/**
+ * Render a coverage percentage for print. NULL means the ratio is undefined
+ * (empty denominator), and it must print as "n/a" rather than interpolating to
+ * the string "null%" — this text goes into a PDF a financier reads, so a
+ * template literal over a nullable number is a real defect, not a nit. See the
+ * note on financierCoverage in lib/data/diligence-rollup.ts for why the value
+ * is null instead of 100.
+ */
+function pctLabel(pct: number | null): string {
+  return pct == null ? "n/a" : `${pct}%`;
+}
+
 export interface PacketPdfInput {
   dealName: string;
   generatedOn: string; // human date
@@ -83,7 +95,7 @@ export async function buildDiligencePacketPdf(
   const r = input.rollup;
   drawText(
     page,
-    `Readiness ${r.coveragePct}%  -  ${r.approved}/${r.applicable} required items approved  -  ${r.outstandingCount} outstanding  -  ${r.overdueCount} overdue`,
+    `Readiness ${pctLabel(r.coveragePct)}  -  ${r.approved}/${r.applicable} required items approved  -  ${r.outstandingCount} outstanding  -  ${r.overdueCount} overdue`,
     brand,
     { x: left, y, size: 10, color: PDF_COLORS.slate }
   );
@@ -101,7 +113,7 @@ export async function buildDiligencePacketPdf(
       });
       drawTextRight(
         page,
-        `${f.coveragePct}%  (${f.satisfied}/${f.total}${f.unmappedCount ? `, ${f.unmappedCount} unmapped` : ""})`,
+        `${pctLabel(f.coveragePct)}  (${f.satisfied}/${f.total}${f.unmappedCount ? `, ${f.unmappedCount} unmapped` : ""})`,
         brand,
         { rightX: right, y, size: 9, color: PDF_COLORS.slate }
       );
@@ -235,7 +247,7 @@ export async function buildFinancierPacketPdf(
 
   drawText(
     page,
-    `Coverage ${f.coveragePct}%  -  ${f.satisfied}/${f.total} required items satisfied${
+    `Coverage ${pctLabel(f.coveragePct)}  -  ${f.satisfied}/${f.total} required items satisfied${
       f.unmappedCount ? `  -  ${f.unmappedCount} not yet mapped` : ""
     }`,
     brand,
