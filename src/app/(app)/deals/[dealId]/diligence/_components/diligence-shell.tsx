@@ -10,6 +10,7 @@
 // ============================================================================
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -32,6 +33,7 @@ import {
   ChevronRight,
   CheckCircle2,
   FileText,
+  FolderOpen,
 } from "lucide-react";
 import { Card, KpiTile, Badge, CircularProgress, FileIcon, type FileType } from "@/components/nurock-ui";
 import { Button } from "@/components/ui/button";
@@ -65,6 +67,15 @@ import type {
 } from "@/lib/data/diligence-rollup";
 import type { TemplateSummary } from "@/lib/data/diligence-templates";
 import type { DeadlineItem } from "@/lib/data/diligence-deadlines";
+import {
+  docDisplayName,
+  docExt,
+  docIconType,
+  docSizeLabel,
+  isPdfDoc,
+  isImageDoc,
+  isPreviewable,
+} from "@/lib/diligence/doc-display";
 import { DILIGENCE_STATUSES, STATUS_META, WAIVE_STATES } from "./status";
 import { MetPill, metVarianceDays } from "./met-pill";
 import { ItemDrawer } from "./item-drawer";
@@ -112,48 +123,6 @@ const STATUS_BADGE_BY_TONE: Record<
   bad: "red",
   muted: "navy",
 };
-
-// ---------------------------------------------------------------------------
-// Document Vault helpers (pure) — file-type detection + size label.
-// mimeType is nullable and often "application/octet-stream", so branch on the
-// filename extension too (mirrors the drawer's fileTypeOf approach).
-// ---------------------------------------------------------------------------
-const DOC_IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "heic", "avif", "bmp", "svg"];
-
-function docDisplayName(d: LibraryDoc): string {
-  return d.displayName ?? d.originalFilename;
-}
-function docExt(d: LibraryDoc): string {
-  const n = d.originalFilename || d.displayName || "";
-  const i = n.lastIndexOf(".");
-  return i >= 0 && i < n.length - 1 ? n.slice(i + 1).toLowerCase() : "";
-}
-function isPdfDoc(d: LibraryDoc): boolean {
-  return d.mimeType === "application/pdf" || docExt(d) === "pdf";
-}
-function isImageDoc(d: LibraryDoc): boolean {
-  return (d.mimeType?.startsWith("image/") ?? false) || DOC_IMAGE_EXTS.includes(docExt(d));
-}
-/** Inline-previewable (PDF via iframe, image via img); everything else uses a
- *  styled placeholder + download. */
-function isPreviewable(d: LibraryDoc): boolean {
-  return isPdfDoc(d) || isImageDoc(d);
-}
-function docIconType(d: LibraryDoc): FileType {
-  const ext = docExt(d);
-  const m = d.mimeType ?? "";
-  if (isPdfDoc(d)) return "pdf";
-  if (isImageDoc(d)) return "img";
-  if (ext === "csv" || m.includes("csv")) return "csv";
-  if (["xls", "xlsx"].includes(ext) || m.includes("spreadsheet") || m.includes("excel")) return "xls";
-  return "doc";
-}
-/** Preserves the shipped convention (Dil #10): sub-1KB files show "<1 KB". */
-function docSizeLabel(bytes: number | null): string {
-  if (bytes == null) return "—";
-  if (bytes < 1024) return "<1 KB";
-  return `${(bytes / 1024).toFixed(0)} KB`;
-}
 
 export function DiligenceShell({
   checklist,
@@ -964,195 +933,48 @@ export function DiligenceShell({
         </div>
       )}
 
-      {/* Part 2 — shared per-deal document library, presented as a Split-Pane
-          Document Vault: left = file explorer (click to preview), right =
-          preview pane. Linking still happens from an item's drawer. */}
-      <div>
-        <div className="flex items-center justify-between mb-2 gap-3">
-          <h2 className="font-display text-sm uppercase tracking-wider text-nurock-slate">
-            Document Library
-          </h2>
-          <span className="text-[11px] text-nurock-slate-light hidden md:inline">
-            Uploaded once, linkable to any number of checklist items
-          </span>
-        </div>
-        {library.length === 0 ? (
-          <Card className="p-4 text-[12px] text-nurock-slate-light">
-            No documents on this deal yet. Upload one from any item&apos;s
-            drawer and it appears here, ready to link to other items without
-            re-uploading.
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-12rem)]">
-            {/* Left rail — file explorer */}
-            <Card className="p-0 overflow-hidden lg:col-span-1 flex flex-col">
-              <div className="px-4 py-2 border-b border-nurock-border text-[10.5px] uppercase tracking-wider text-nurock-slate-light font-medium">
-                {library.length} document{library.length === 1 ? "" : "s"}
-              </div>
-              <ul className="flex-1 overflow-y-auto divide-y divide-nurock-border/60">
-                {library.map((d) => {
-                  const linkedTitles = d.linkedItemIds
-                    .map((id) => itemTitleById.get(id))
-                    .filter(Boolean) as string[];
-                  const active = d.id === selectedDocId;
-                  return (
-                    <li key={d.id}>
-                      <button
-                        type="button"
-                        onClick={() => selectDoc(d)}
-                        aria-current={active ? "true" : undefined}
-                        className={`w-full text-left px-4 py-2.5 flex items-start gap-2.5 border-l-2 transition-colors ${
-                          active
-                            ? "bg-nurock-tan/10 border-nurock-tan"
-                            : "border-transparent hover:bg-nurock-offwhite"
-                        }`}
-                      >
-                        <FileIcon type={docIconType(d)} />
-                        <span className="min-w-0 flex-1">
-                          <span
-                            className="block truncate text-[12.5px] text-nurock-black"
-                            title={docDisplayName(d)}
-                          >
-                            {docDisplayName(d)}
-                          </span>
-                          <span
-                            className="block text-[11px] text-nurock-slate-light"
-                            title={linkedTitles.join("\n") || undefined}
-                          >
-                            {docSizeLabel(d.byteSize)} · {d.linkedItemIds.length}{" "}
-                            {d.linkedItemIds.length === 1 ? "item" : "items"}
-                          </span>
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </Card>
+      {/* ---------------------------------------------------------------
+          The Document Library MOVED to /deals/[dealId]/documents (ASK 4).
+          ---------------------------------------------------------------
+          It was a full split-pane vault right here, at the bottom of this page,
+          below the checklist and the deadlines and the packets. Two problems:
+          it was reachable only by scrolling past everything else and could not
+          be linked to, and it could only ever list documents ALREADY attached
+          to a checklist item, because this page assembles `library` from the
+          LINK table. A document uploaded to the deal and not yet filed was
+          invisible.
 
-            {/* Right rail — preview pane */}
-            <Card className="p-0 overflow-hidden lg:col-span-2 flex flex-col">
-              {!selectedDoc ? (
-                <div className="flex-1 p-6">
-                  <div className="h-full min-h-[240px] rounded-lg border-2 border-dashed border-nurock-border flex flex-col items-center justify-center gap-3 text-center">
-                    <FileText className="w-10 h-10 text-nurock-slate-light opacity-50" />
-                    <div className="text-sm font-medium text-nurock-slate">
-                      Select a document to preview
-                    </div>
-                    <div className="text-[12px] text-nurock-slate-light">
-                      Choose a file from the library on the left.
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  {/* Header — name + Download */}
-                  <div className="px-4 py-3 border-b border-nurock-border flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <FileIcon type={docIconType(selectedDoc)} />
-                      <div className="min-w-0">
-                        <div
-                          className="truncate font-display text-[13px] text-nurock-black"
-                          title={docDisplayName(selectedDoc)}
-                        >
-                          {docDisplayName(selectedDoc)}
-                        </div>
-                        <div className="text-[11px] text-nurock-slate-light">
-                          {docSizeLabel(selectedDoc.byteSize)}
-                          {selectedDoc.mimeType ? ` · ${selectedDoc.mimeType}` : ""}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8"
-                        onClick={() => onViewLibraryDoc(selectedDoc.filePath)}
-                      >
-                        <ExternalLink className="w-3.5 h-3.5 mr-1" /> Open
-                      </Button>
-                      <Button
-                        size="sm"
-                        className="h-8 bg-nurock-navy hover:bg-nurock-navy-dark text-white"
-                        onClick={() => downloadDoc(selectedDoc)}
-                        disabled={downloadingDocId === selectedDoc.id}
-                      >
-                        {downloadingDocId === selectedDoc.id ? (
-                          <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
-                        ) : (
-                          <Download className="w-3.5 h-3.5 mr-1" />
-                        )}
-                        Download File
-                      </Button>
-                    </div>
-                  </div>
+          What replaced it reads from dm_diligence_documents outward, so unfiled
+          documents are first-class, and it has search and filters.
 
-                  {/* Viewer */}
-                  <div className="flex-1 overflow-hidden bg-nurock-offwhite">
-                    {previewLoading ? (
-                      <div className="h-full flex items-center justify-center text-[12px] text-nurock-slate-light">
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Loading preview…
-                      </div>
-                    ) : previewError ? (
-                      <div className="h-full flex flex-col items-center justify-center gap-2 px-6 text-center">
-                        <AlertTriangle className="w-6 h-6 text-red-500" />
-                        <div className="text-[12px] text-red-600">{previewError}</div>
-                        <Button variant="outline" size="sm" onClick={() => selectDoc(selectedDoc)}>
-                          Retry
-                        </Button>
-                      </div>
-                    ) : previewUrl && isPdfDoc(selectedDoc) ? (
-                      <iframe
-                        src={previewUrl}
-                        title={`Preview — ${docDisplayName(selectedDoc)}`}
-                        className="w-full h-full border-0"
-                      />
-                    ) : previewUrl && isImageDoc(selectedDoc) ? (
-                      <div className="h-full overflow-auto flex items-center justify-center p-4">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={previewUrl}
-                          alt={docDisplayName(selectedDoc)}
-                          className="max-w-full max-h-full object-contain"
-                        />
-                      </div>
-                    ) : (
-                      <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
-                        <FileIcon type={docIconType(selectedDoc)} />
-                        <div className="text-sm font-medium text-nurock-slate">
-                          Inline preview isn&apos;t available for this file type
-                        </div>
-                        <div className="text-[12px] text-nurock-slate-light">
-                          {docExt(selectedDoc) ? `.${docExt(selectedDoc)} files` : "These files"}{" "}
-                          open in a new tab or download.
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => onViewLibraryDoc(selectedDoc.filePath)}
-                          >
-                            <ExternalLink className="w-3.5 h-3.5 mr-1" /> Open
-                          </Button>
-                          <Button
-                            size="sm"
-                            className="bg-nurock-navy hover:bg-nurock-navy-dark text-white"
-                            onClick={() => downloadDoc(selectedDoc)}
-                            disabled={downloadingDocId === selectedDoc.id}
-                          >
-                            <Download className="w-3.5 h-3.5 mr-1" /> Download File
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </Card>
+          THIS IS A POINTER, NOT A SECOND IMPLEMENTATION. Keeping a working copy
+          of the vault here as well is exactly how two implementations of one
+          concept start disagreeing — the defect family this codebase keeps
+          paying for. The per-item document lists in the checklist drawer are
+          untouched: "what is attached to THIS item" is a different question and
+          is still answered where it is asked.
+          --------------------------------------------------------------- */}
+      <Card className="p-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="font-display text-sm uppercase tracking-wider text-nurock-slate">
+              Document Library
+            </h2>
+            <p className="text-[12px] text-nurock-slate-light mt-1">
+              {library.length === 0
+                ? "No documents on this deal yet — upload straight to the library, or from any item's drawer."
+                : `${library.length} document${library.length === 1 ? "" : "s"}, linkable to any number of checklist items.`}
+            </p>
           </div>
-        )}
-      </div>
+          <Link
+            href={`/deals/${dealId}/documents`}
+            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-md border border-nurock-border bg-white px-3 py-1.5 text-[12px] font-medium text-nurock-navy shadow-sm hover:bg-nurock-gray"
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+            Open Document Library
+          </Link>
+        </div>
+      </Card>
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">

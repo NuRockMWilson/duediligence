@@ -1,4 +1,4 @@
-import { ClipboardList } from "lucide-react";
+import { ClipboardList, FolderOpen } from "lucide-react";
 
 // =============================================================================
 // Single source of truth for the deal-shell navigation. Shared by the sidebar
@@ -28,6 +28,20 @@ export function buildNav(dealId: string): NavGroup[] {
           href: `${base}/diligence`,
           label: "Due Diligence",
           icon: ClipboardList,
+        },
+        // ASK 4. The library used to be a section at the BOTTOM of the diligence
+        // page — below the checklist, the deadlines and the financier packets —
+        // so it was reachable only by scrolling past everything and could not be
+        // linked to. It is a place people go directly, so it gets a route.
+        //
+        // The rail deliberately stays a SHORT fixed list. The live session's own
+        // recommendation was Overview / Checklist / Documents, and entity or
+        // packet structure belongs inside a page as filters and groups, never as
+        // more rail entries.
+        {
+          href: `${base}/documents`,
+          label: "Documents",
+          icon: FolderOpen,
         },
       ],
     },

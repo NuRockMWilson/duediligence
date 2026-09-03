@@ -18,8 +18,27 @@ import { createClient } from "@/lib/supabase/server";
 
 export const DILIGENCE_BUCKET = "diligence-attachments";
 
+/**
+ * Path segment used in place of a deal-item id for a document uploaded to the
+ * deal's library WITHOUT being attached to a checklist item (ASK 3).
+ *
+ * WHY A SENTINEL RATHER THAN A TWO-SEGMENT KEY. The storage policies in
+ * 20260831_diligence_storage_policies.sql authorize on
+ * `dm_user_has_access((storage.foldername(name))[1])` — the FIRST segment, the
+ * deal id, and nothing else. So segment 2 is free, and keeping the key shape at
+ * exactly three segments means an unfiled upload lands inside the same
+ * deal-scoped access check as every other file, with no policy change at all. A
+ * shorter key would still be authorized, but it would make `foldername()[1]`
+ * mean two different things depending on the file, which is how a storage policy
+ * quietly stops matching.
+ *
+ * The leading underscore keeps it un-collidable with a uuid.
+ */
+export const UNFILED_SEGMENT = "_unfiled";
+
 export interface UploadArgs {
   dealId: string;
+  /** A deal-item id, or UNFILED_SEGMENT for a library-only upload. */
   dealItemId: string;
   file: File;
 }
@@ -76,6 +95,36 @@ export function buildDisplayName(opts: {
     `${opts.dealName} - ${num}${opts.itemTitle} - ${opts.dateIso}`
   );
   return `${base}${ext}`;
+}
+
+/**
+ * Display name for a document uploaded to the library with NO checklist item
+ * (ASK 3): "{Deal} - {original base} - {YYYY-MM-DD}.ext".
+ *
+ * DELIBERATELY NOT buildDisplayName WITH A BLANK ITEM. That function's format
+ * is "{Deal} - {Item#} {Item Title} - {date}", and feeding it an empty title
+ * produces a name that LOOKS like an item-assigned document with a missing
+ * item — the reader cannot tell "unfiled" from "filed under something blank".
+ * This keeps the deal and the date (both true) and carries the uploader's own
+ * filename instead of implying a checklist position the file does not have.
+ *
+ * Linking the document to an item later does not rename it. That is intentional:
+ * the file already exists under this key and this label in storage and, once
+ * the SharePoint provider is live, in SharePoint — renaming on link would mean a
+ * move, and a move that fails leaves the row pointing at a path that is gone.
+ */
+export function buildUnfiledDisplayName(opts: {
+  dealName: string;
+  originalFilename: string;
+  /** ISO yyyy-mm-dd; pass from the caller so the function stays deterministic. */
+  dateIso: string;
+}): string {
+  const ext = fileExtension(opts.originalFilename);
+  const base = opts.originalFilename.slice(
+    0,
+    opts.originalFilename.length - ext.length
+  );
+  return `${sanitize(`${opts.dealName} - ${base} - ${opts.dateIso}`)}${ext}`;
 }
 
 /** Collision-safe storage key: {dealId}/{dealItemId}/{uuid}{ext}. */

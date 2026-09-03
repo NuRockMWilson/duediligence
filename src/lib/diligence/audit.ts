@@ -28,7 +28,13 @@ export type DiligenceAuditEventType =
   // type — every attempted delete failed with a privilege error — so there is
   // nothing historical to keep it for.
   | "template_item_retired"
-  | "template_item_restored";
+  | "template_item_restored"
+  // Deal document library (ASK 3): an upload with no checklist item attached,
+  // and an outright removal from the library. document_linked/document_unlinked
+  // already exist and are reused for the link side regardless of which screen
+  // the user was on.
+  | "document_uploaded_unfiled"
+  | "document_deleted";
 
 export interface DiligenceAuditEvent {
   /** Null for org-level events (e.g. template imports in Settings). */
