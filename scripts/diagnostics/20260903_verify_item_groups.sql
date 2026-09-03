@@ -9,9 +9,27 @@
 -- how the SQL editor handles transactions.
 --
 -- ----------------------------------------------------------------------------
--- WHY THIS IS THE SECOND VERSION
+-- WHY THIS IS THE THIRD VERSION. TWO OF MY BUGS, BOTH THE SAME ROOT CAUSE.
 -- ----------------------------------------------------------------------------
--- The first one failed with: ERROR 42P01: relation "_verify" does not exist.
+-- I cannot execute plpgsql in this environment (see WHY A VERIFIER AT ALL,
+-- below), and pglast — the only checker available to me — treats a dollar-quoted
+-- body as an OPAQUE STRING. So it proves the file is valid SQL and validates
+-- nothing inside the DO block. Two runtime bugs reached Michael because of that,
+-- and both are recorded here rather than quietly fixed:
+--
+-- v2 FAILED WITH: ERROR 22P02: malformed array literal:
+--                 "PASS  05 FOURTH level is refused"
+-- The report accumulated into `res text[]`, and `res || 'PASS ...'` with an
+-- UNTYPED literal makes Postgres prefer `anyarray || anyarray` over
+-- `anyarray || anyelement` — so it tried to parse the sentence as an array
+-- literal. Checks 01-04 passed only because they wrapped their text in
+-- format(), which returns explicitly-typed text. A perfect illustration of the
+-- house rule: the first four checks could not fail in a way that revealed the
+-- bug, so they looked like evidence the mechanism worked.
+-- FIXED by deleting the ambiguity rather than casting fifteen literals: `res` is
+-- now plain `text` and entries are joined with a newline. There is no array.
+--
+-- v1 FAILED WITH: ERROR 42P01: relation "_verify" does not exist.
 -- My bug, and an instructive one. It opened with BEGIN, created a
 -- `CREATE TEMP TABLE _verify (...) ON COMMIT DROP`, and expected the whole
 -- script to be one transaction. The Supabase SQL editor COMMITS PER STATEMENT,
@@ -52,7 +70,7 @@
 
 DO $$
 DECLARE
-  res      text[] := '{}';
+  res      text := '';
   n_fail   int := 0;
   v_tmpl   uuid;
   v_other  uuid;
@@ -84,19 +102,22 @@ BEGIN
   -- ==========================================================================
   INSERT INTO nurock_diligence_item_groups (template_id, label, code)
     VALUES (v_tmpl, 'Real Estate', '2') RETURNING id, depth INTO v_l0, v_depth;
-  res := res || format('%s  01 top-level group gets depth 0 (got %s)',
+  res := res || E'
+' || format('%s  01 top-level group gets depth 0 (got %s)',
                        CASE WHEN v_depth = 0 THEN 'PASS' ELSE 'FAIL' END, v_depth);
   IF v_depth <> 0 THEN n_fail := n_fail + 1; END IF;
 
   INSERT INTO nurock_diligence_item_groups (template_id, parent_group_id, label, code)
     VALUES (v_tmpl, v_l0, 'Title', '2.a') RETURNING id, depth INTO v_l1, v_depth;
-  res := res || format('%s  02 subsection gets depth 1 (got %s)',
+  res := res || E'
+' || format('%s  02 subsection gets depth 1 (got %s)',
                        CASE WHEN v_depth = 1 THEN 'PASS' ELSE 'FAIL' END, v_depth);
   IF v_depth <> 1 THEN n_fail := n_fail + 1; END IF;
 
   INSERT INTO nurock_diligence_item_groups (template_id, parent_group_id, label)
     VALUES (v_tmpl, v_l1, 'Guarantor iii') RETURNING id, depth INTO v_l2, v_depth;
-  res := res || format('%s  03 third level gets depth 2 (got %s)',
+  res := res || E'
+' || format('%s  03 third level gets depth 2 (got %s)',
                        CASE WHEN v_depth = 2 THEN 'PASS' ELSE 'FAIL' END, v_depth);
   IF v_depth <> 2 THEN n_fail := n_fail + 1; END IF;
 
@@ -104,11 +125,13 @@ BEGIN
   BEGIN
     INSERT INTO nurock_diligence_item_groups (template_id, parent_group_id, label, depth)
       VALUES (v_tmpl, v_l0, 'ZZ lying about depth', 0) RETURNING depth INTO v_depth;
-    res := res || format('%s  04 caller-supplied depth is overridden (got %s)',
+    res := res || E'
+' || format('%s  04 caller-supplied depth is overridden (got %s)',
                          CASE WHEN v_depth = 1 THEN 'PASS' ELSE 'FAIL' END, v_depth);
     IF v_depth <> 1 THEN n_fail := n_fail + 1; END IF;
   EXCEPTION WHEN others THEN
-    res := res || format('FAIL  04 caller-supplied depth is overridden -> %s', SQLERRM);
+    res := res || E'
+' || format('FAIL  04 caller-supplied depth is overridden -> %s', SQLERRM);
     n_fail := n_fail + 1;
   END;
 
@@ -118,13 +141,16 @@ BEGIN
   BEGIN
     INSERT INTO nurock_diligence_item_groups (template_id, parent_group_id, label)
       VALUES (v_tmpl, v_l2, 'ZZ too deep');
-    res := res || 'FAIL  05 FOURTH level is refused -> the insert SUCCEEDED';
+    res := res || E'
+' || 'FAIL  05 FOURTH level is refused -> the insert SUCCEEDED';
     n_fail := n_fail + 1;
   EXCEPTION WHEN others THEN
     IF SQLERRM ILIKE '%at most three levels%' THEN
-      res := res || 'PASS  05 FOURTH level is refused';
+      res := res || E'
+' || 'PASS  05 FOURTH level is refused';
     ELSE
-      res := res || format('FAIL  05 refused, but with the wrong error -> %s', SQLERRM);
+      res := res || E'
+' || format('FAIL  05 refused, but with the wrong error -> %s', SQLERRM);
       n_fail := n_fail + 1;
     END IF;
   END;
@@ -135,18 +161,22 @@ BEGIN
   -- ==========================================================================
   BEGIN
     UPDATE nurock_diligence_item_groups SET parent_group_id = id WHERE id = v_l0;
-    res := res || 'FAIL  06 self-parent is refused -> the update SUCCEEDED';
+    res := res || E'
+' || 'FAIL  06 self-parent is refused -> the update SUCCEEDED';
     n_fail := n_fail + 1;
   EXCEPTION WHEN others THEN
-    res := res || 'PASS  06 self-parent is refused';
+    res := res || E'
+' || 'PASS  06 self-parent is refused';
   END;
 
   BEGIN
     UPDATE nurock_diligence_item_groups SET parent_group_id = v_l2 WHERE id = v_l0;
-    res := res || 'FAIL  07 ancestor cycle is refused -> the update SUCCEEDED';
+    res := res || E'
+' || 'FAIL  07 ancestor cycle is refused -> the update SUCCEEDED';
     n_fail := n_fail + 1;
   EXCEPTION WHEN others THEN
-    res := res || 'PASS  07 ancestor cycle is refused';
+    res := res || E'
+' || 'PASS  07 ancestor cycle is refused';
   END;
 
   -- ==========================================================================
@@ -155,13 +185,16 @@ BEGIN
   BEGIN
     INSERT INTO nurock_diligence_item_groups (template_id, parent_group_id, label)
       VALUES (v_other, v_l0, 'ZZ wrong template');
-    res := res || 'FAIL  08 cross-template parent is refused -> the insert SUCCEEDED';
+    res := res || E'
+' || 'FAIL  08 cross-template parent is refused -> the insert SUCCEEDED';
     n_fail := n_fail + 1;
   EXCEPTION WHEN others THEN
     IF SQLERRM ILIKE '%parent belongs to template%' THEN
-      res := res || 'PASS  08 cross-template parent is refused';
+      res := res || E'
+' || 'PASS  08 cross-template parent is refused';
     ELSE
-      res := res || format('FAIL  08 refused, but with the wrong error -> %s', SQLERRM);
+      res := res || E'
+' || format('FAIL  08 refused, but with the wrong error -> %s', SQLERRM);
       n_fail := n_fail + 1;
     END IF;
   END;
@@ -170,13 +203,16 @@ BEGIN
     VALUES (v_other, 'ZZ other template section') RETURNING id INTO v_og;
   BEGIN
     UPDATE nurock_diligence_items SET group_id = v_og WHERE id = v_item;
-    res := res || 'FAIL  09 item cannot join another template''s group -> the update SUCCEEDED';
+    res := res || E'
+' || 'FAIL  09 item cannot join another template''s group -> the update SUCCEEDED';
     n_fail := n_fail + 1;
   EXCEPTION WHEN others THEN
     IF SQLERRM ILIKE '%belongs to template%' THEN
-      res := res || 'PASS  09 item cannot join another template''s group';
+      res := res || E'
+' || 'PASS  09 item cannot join another template''s group';
     ELSE
-      res := res || format('FAIL  09 refused, but with the wrong error -> %s', SQLERRM);
+      res := res || E'
+' || format('FAIL  09 refused, but with the wrong error -> %s', SQLERRM);
       n_fail := n_fail + 1;
     END IF;
   END;
@@ -187,28 +223,34 @@ BEGIN
   BEGIN
     INSERT INTO nurock_diligence_item_groups (template_id, label, is_entity_parameterized)
       VALUES (v_tmpl, 'ZZ repeats over nothing', true);
-    res := res || 'FAIL  10 parameterized group needs an entity_role -> the insert SUCCEEDED';
+    res := res || E'
+' || 'FAIL  10 parameterized group needs an entity_role -> the insert SUCCEEDED';
     n_fail := n_fail + 1;
   EXCEPTION WHEN others THEN
-    res := res || 'PASS  10 parameterized group needs an entity_role';
+    res := res || E'
+' || 'PASS  10 parameterized group needs an entity_role';
   END;
 
   BEGIN
     INSERT INTO nurock_diligence_item_groups (template_id, label, entity_role)
       VALUES (v_tmpl, 'ZZ role without repeating', 'guarantor');
-    res := res || 'FAIL  11 entity_role requires the flag -> the insert SUCCEEDED';
+    res := res || E'
+' || 'FAIL  11 entity_role requires the flag -> the insert SUCCEEDED';
     n_fail := n_fail + 1;
   EXCEPTION WHEN others THEN
-    res := res || 'PASS  11 entity_role requires the flag';
+    res := res || E'
+' || 'PASS  11 entity_role requires the flag';
   END;
 
   BEGIN
     INSERT INTO nurock_diligence_item_groups
       (template_id, label, is_entity_parameterized, entity_role)
       VALUES (v_tmpl, 'ZZ Guarantors', true, 'guarantor');
-    res := res || 'PASS  12 flag + role together is accepted';
+    res := res || E'
+' || 'PASS  12 flag + role together is accepted';
   EXCEPTION WHEN others THEN
-    res := res || format('FAIL  12 flag + role together is accepted -> %s', SQLERRM);
+    res := res || E'
+' || format('FAIL  12 flag + role together is accepted -> %s', SQLERRM);
     n_fail := n_fail + 1;
   END;
 
@@ -217,10 +259,12 @@ BEGIN
   -- ==========================================================================
   BEGIN
     INSERT INTO nurock_diligence_item_groups (template_id, label) VALUES (v_tmpl, '   ');
-    res := res || 'FAIL  13 blank label is refused -> the insert SUCCEEDED';
+    res := res || E'
+' || 'FAIL  13 blank label is refused -> the insert SUCCEEDED';
     n_fail := n_fail + 1;
   EXCEPTION WHEN others THEN
-    res := res || 'PASS  13 blank label is refused';
+    res := res || E'
+' || 'PASS  13 blank label is refused';
   END;
 
   -- ==========================================================================
@@ -231,9 +275,11 @@ BEGIN
   BEGIN
     INSERT INTO nurock_diligence_item_groups (template_id, label, sort_order)
       VALUES (v_tmpl, 'ZZ shares position A', 5), (v_tmpl, 'ZZ shares position B', 5);
-    res := res || 'PASS  14 two groups may share a sort_order';
+    res := res || E'
+' || 'PASS  14 two groups may share a sort_order';
   EXCEPTION WHEN others THEN
-    res := res || format('FAIL  14 two groups may share a sort_order -> %s', SQLERRM);
+    res := res || E'
+' || format('FAIL  14 two groups may share a sort_order -> %s', SQLERRM);
     n_fail := n_fail + 1;
   END;
 
@@ -245,19 +291,22 @@ BEGIN
   DELETE FROM nurock_diligence_item_groups WHERE id = v_l0;
 
   SELECT count(*) INTO v_n FROM nurock_diligence_items WHERE id = v_item;
-  res := res || format('%s  15 item SURVIVES deletion of its group (rows=%s)',
+  res := res || E'
+' || format('%s  15 item SURVIVES deletion of its group (rows=%s)',
                        CASE WHEN v_n = 1 THEN 'PASS' ELSE 'FAIL' END, v_n);
   IF v_n <> 1 THEN n_fail := n_fail + 1; END IF;
 
   SELECT count(*) INTO v_n
     FROM nurock_diligence_items WHERE id = v_item AND group_id IS NULL;
-  res := res || format('%s  16 orphaned item''s group_id reset to NULL (rows=%s)',
+  res := res || E'
+' || format('%s  16 orphaned item''s group_id reset to NULL (rows=%s)',
                        CASE WHEN v_n = 1 THEN 'PASS' ELSE 'FAIL' END, v_n);
   IF v_n <> 1 THEN n_fail := n_fail + 1; END IF;
 
   SELECT count(*) INTO v_n
     FROM nurock_diligence_item_groups WHERE id IN (v_l1, v_l2);
-  res := res || format('%s  17 subsections cascade with their section (remaining=%s)',
+  res := res || E'
+' || format('%s  17 subsections cascade with their section (remaining=%s)',
                        CASE WHEN v_n = 0 THEN 'PASS' ELSE 'FAIL' END, v_n);
   IF v_n <> 0 THEN n_fail := n_fail + 1; END IF;
 
@@ -269,7 +318,8 @@ BEGIN
     FROM information_schema.role_table_grants
    WHERE table_schema = 'public' AND grantee = 'anon'
      AND table_name IN ('nurock_diligence_item_groups', 'nurock_diligence_items');
-  res := res || format('%s  18 anon holds NOTHING on both catalog tables (%s)',
+  res := res || E'
+' || format('%s  18 anon holds NOTHING on both catalog tables (%s)',
                        CASE WHEN v_n = 0 THEN 'PASS' ELSE 'FAIL' END, v_txt);
   IF v_n <> 0 THEN n_fail := n_fail + 1; END IF;
 
@@ -279,7 +329,8 @@ BEGIN
    WHERE table_schema = 'public' AND privilege_type = 'TRUNCATE'
      AND grantee IN ('anon', 'authenticated')
      AND table_name IN ('nurock_diligence_item_groups', 'nurock_diligence_items');
-  res := res || format('%s  19 TRUNCATE granted to nobody (%s)',
+  res := res || E'
+' || format('%s  19 TRUNCATE granted to nobody (%s)',
                        CASE WHEN v_n = 0 THEN 'PASS' ELSE 'FAIL' END, v_txt);
   IF v_n <> 0 THEN n_fail := n_fail + 1; END IF;
 
@@ -289,7 +340,8 @@ BEGIN
     FROM information_schema.role_table_grants
    WHERE table_schema = 'public' AND table_name = 'nurock_diligence_items'
      AND privilege_type = 'DELETE' AND grantee = 'authenticated';
-  res := res || format('%s  20 items has NO DELETE grant, by design (found=%s)',
+  res := res || E'
+' || format('%s  20 items has NO DELETE grant, by design (found=%s)',
                        CASE WHEN v_n = 0 THEN 'PASS' ELSE 'FAIL' END, v_n);
   IF v_n <> 0 THEN n_fail := n_fail + 1; END IF;
 
@@ -297,7 +349,8 @@ BEGIN
     INTO v_n, v_txt
     FROM pg_policies
    WHERE schemaname = 'public' AND tablename = 'nurock_diligence_item_groups';
-  res := res || format('%s  21 groups table has exactly two policies (%s)',
+  res := res || E'
+' || format('%s  21 groups table has exactly two policies (%s)',
                        CASE WHEN v_n = 2 THEN 'PASS' ELSE 'FAIL' END, v_txt);
   IF v_n <> 2 THEN n_fail := n_fail + 1; END IF;
 
@@ -307,7 +360,8 @@ BEGIN
      AND cmd = 'ALL'
      AND (btrim(coalesce(qual, '')) = 'true'
           OR btrim(coalesce(with_check, '')) = 'true');
-  res := res || format('%s  22 no unconditional TRUE write predicate (found=%s)',
+  res := res || E'
+' || format('%s  22 no unconditional TRUE write predicate (found=%s)',
                        CASE WHEN v_n = 0 THEN 'PASS' ELSE 'FAIL' END, v_n);
   IF v_n <> 0 THEN n_fail := n_fail + 1; END IF;
 
@@ -316,7 +370,8 @@ BEGIN
     FROM nurock_diligence_items i
     JOIN nurock_diligence_templates t ON t.id = i.template_id
    WHERE i.group_id IS NOT NULL AND t.slug NOT LIKE 'zz-verify-groups-%';
-  res := res || format('%s  23 no PRE-EXISTING item was grouped (found=%s)',
+  res := res || E'
+' || format('%s  23 no PRE-EXISTING item was grouped (found=%s)',
                        CASE WHEN v_n = 0 THEN 'PASS' ELSE 'FAIL' END, v_n);
   IF v_n <> 0 THEN n_fail := n_fail + 1; END IF;
 
@@ -324,5 +379,5 @@ BEGIN
   -- Report, and roll everything back by raising.
   -- ==========================================================================
   RAISE EXCEPTION E'\n==== VERIFIER REPORT (% failed of 23) ====\n%\n==== END. This error is INTENTIONAL: it rolls back every fixture above, so nothing was written. ====',
-    n_fail, array_to_string(res, E'\n');
+    n_fail, res;
 END $$;
