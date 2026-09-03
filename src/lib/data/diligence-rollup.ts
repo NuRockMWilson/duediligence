@@ -428,7 +428,8 @@ export async function getDiligenceFinancierCoverage(
         // NULL, NOT 100. A BADGE THAT CANNOT FAIL IS NOT A MEASUREMENT.
         // ---------------------------------------------------------------
         // MEASURED LIVE 2026-09-03. Residences at Westview Landing had exactly
-        // one adopted packet — "PNC Bank - Equity" — with no items in it, and
+        // one adopted packet — name "PNC Bank", template_kind "investor", which
+        // the card renders as "PNC Bank | Investor" — with no items in it, and
         // this expression returned total=0, satisfied=0, coveragePct=100. The
         // deal page rendered "PNC Bank / INVESTOR / 100% / 0/0 items
         // satisfied", telling the CFO that PNC's diligence was fully covered on
