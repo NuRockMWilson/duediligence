@@ -1,7 +1,12 @@
 # Template-owned item groups — design (ASK 6, and the schema ASK 2 was waiting on)
 
 **Status:** migration written, not run. `supabase/migrations/20260903_diligence_item_groups.sql`
-**Verifier:** `scripts/diagnostics/20260903_verify_item_groups.sql` — run after the migration; every row must read `PASS`
+**Verifier:** four scripts in `scripts/diagnostics/`, run in order after the migration —
+`20260903_verify_groups_1_structure.sql` (read-only, returns a table),
+`..._2_depth.sql`, `..._3_integrity.sql`, `..._4_detach.sql` (each creates a throwaway template and
+ends by RAISING, which is what rolls it back). Every line must read `PASS`.
+Split from one 300-line file after it failed twice on plpgsql type resolution that no checker
+available here can see — see §6.
 **Author:** Claude, 2026-09-03. Michael runs all SQL; nobody else.
 
 ---
@@ -122,10 +127,34 @@ own comment requires so live deal tracking can never be orphaned.
   mangles dollar-quoted bodies — the "errors" it reported were the harness misparsing my SQL, not
   defects in it.
 
-That is why `20260903_verify_item_groups.sql` exists and why it **asserts** rather than displays. It
-opens a transaction, creates two throwaway templates, tries to violate all 23 rules the migration
-claims to enforce, prints a `PASS`/`FAIL` per rule, and **ends in `ROLLBACK`** — it changes nothing.
-Constraints nobody has watched refuse anything are not yet known to work.
+That is why the verifiers **assert** rather than display. Constraints nobody has watched refuse
+anything are not yet known to work.
+
+**And that limitation cost two round-trips, which is worth recording rather than tidying away.** The
+verifier began as one 300-line file and failed twice in Michael's hands:
+
+1. `ERROR 42P01: relation "_verify" does not exist` — it opened with `BEGIN`, created a
+   `CREATE TEMP TABLE … ON COMMIT DROP`, and assumed the script was one transaction. The Supabase
+   editor **commits per statement**, so the temp table was dropped by its own `ON COMMIT DROP` before
+   the next statement ran. The same assumption made the trailing `ROLLBACK` decorative — had the block
+   succeeded, its fixtures would have been **committed** into the shared database. It was broken in
+   the direction that writes, under a header promising it changed nothing.
+2. `ERROR 22P02: malformed array literal: "PASS  05 …"` — the report accumulated into a `text[]`, and
+   `res || 'literal'` with an **untyped** literal makes Postgres prefer `anyarray || anyarray`, so it
+   tried to parse the sentence as an array. Checks 01–04 passed only because they used `format()`,
+   which returns typed `text`. Four green checks over a broken accumulator: *they could not fail in a
+   way that revealed the defect*, which is this program's signature failure, occurring inside my own
+   test harness.
+
+So it is now **four small scripts** instead of one large one, on Michael's instruction, and the
+design reflects the lesson:
+
+- **Script 1 is read-only and contains no plpgsql at all** — pure catalog queries returning a table.
+  That removes most of the risk surface, and it works even before the migration is applied.
+- Scripts 2–4 each create one or two throwaway templates and **end by raising**, which is what forces
+  the rollback. No `BEGIN`/`ROLLBACK`, no temp tables, no dependence on editor transaction semantics.
+- Every appended report line goes through `format()`. Not one bare literal, which is the exact bug
+  from (2), and a checker now greps for that pattern specifically.
 
 ## 7. Phase 2 — entities (ASK 2), and the questions only you can answer
 
