@@ -22,6 +22,10 @@ import {
   Loader2,
   Link2,
   RotateCcw,
+  Pencil,
+  ChevronUp,
+  ChevronDown,
+  Check,
 } from "lucide-react";
 import { Card, Badge } from "@/components/nurock-ui";
 import { Button } from "@/components/ui/button";
@@ -50,13 +54,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import FileDropZone from "@/components/file-drop-zone";
+import { Input } from "@/components/ui/input";
 import { suggestCanonicalMatches } from "@/lib/diligence/fuzzy";
-import { categoryLabel } from "@/lib/diligence/categories";
+import {
+  categoryLabel,
+  DILIGENCE_CATEGORIES,
+} from "@/lib/diligence/categories";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import type {
   TemplateSummary,
   CanonicalItemLite,
   TemplateDetail,
+  TemplateItemLite,
   TemplateKind,
 } from "@/lib/data/diligence-templates";
 import {
@@ -71,6 +80,12 @@ import {
   type ParsedSheet,
   type ImportColumnMapping,
 } from "../actions";
+import {
+  addTemplateItem,
+  updateTemplateItem,
+  removeTemplateItem,
+  moveTemplateItem,
+} from "../item-actions";
 
 const KIND_LABEL: Record<TemplateKind, string> = {
   nurock_standard: "Canonical",
@@ -752,6 +767,128 @@ function DetailDrawer({
 
   const isCanonical = detail?.template.isCanonical ?? false;
 
+  // ---------------------------------------------------------------------------
+  // Manual item editing (ASK 1). Until now items could only arrive by import,
+  // so a manually created packet had no way to receive one — the live empty
+  // "PNC Bank - Equity" packet is exactly that dead end.
+  // ---------------------------------------------------------------------------
+  const [addOpen, setAddOpen] = React.useState(false);
+  const [newTitle, setNewTitle] = React.useState("");
+  const [newCategory, setNewCategory] = React.useState(
+    DILIGENCE_CATEGORIES[0].key
+  );
+  const [newCode, setNewCode] = React.useState("");
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [editTitle, setEditTitle] = React.useState("");
+  const [editCategory, setEditCategory] = React.useState("");
+  const [editCode, setEditCode] = React.useState("");
+  const [busyItemId, setBusyItemId] = React.useState<string | null>(null);
+  const [itemToRemove, setItemToRemove] =
+    React.useState<TemplateItemLite | null>(null);
+
+  function resetAdd() {
+    setNewTitle("");
+    setNewCategory(DILIGENCE_CATEGORIES[0].key);
+    setNewCode("");
+    setAddOpen(false);
+  }
+
+  async function submitAdd() {
+    if (!templateId || !newTitle.trim()) return;
+    setBusyItemId("new");
+    const res = await addTemplateItem({
+      templateId,
+      title: newTitle,
+      category: newCategory,
+      description: null,
+      code: newCode.trim() || null,
+    });
+    setBusyItemId(null);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    // ADDING TO THE CANONICAL LIST IS A PORTFOLIO-WIDE CHANGE, not a local one:
+    // ensureDealItems() instantiates it on every adopting deal at the next
+    // diligence page load. Say so rather than letting live checklists silently
+    // grow — the action returns the count precisely so this can be stated.
+    if (res.propagatesToDeals && res.propagatesToDeals > 0) {
+      toast.success(
+        `Item added. It will appear on ${res.propagatesToDeals} deal${
+          res.propagatesToDeals === 1 ? "" : "s"
+        } using the standard checklist.`
+      );
+    } else {
+      toast.success("Item added.");
+    }
+    resetAdd();
+    afterMutation();
+  }
+
+  function beginEdit(item: TemplateItemLite) {
+    setEditingId(item.id);
+    setEditTitle(item.title);
+    setEditCategory(item.category);
+    setEditCode(item.code ?? "");
+  }
+
+  async function submitEdit(item: TemplateItemLite) {
+    if (!editTitle.trim()) {
+      toast.error("Item title is required.");
+      return;
+    }
+    setBusyItemId(item.id);
+    const res = await updateTemplateItem({
+      itemId: item.id,
+      title: editTitle,
+      category: editCategory,
+      description: item.description,
+      code: editCode.trim() || null,
+    });
+    setBusyItemId(null);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    setEditingId(null);
+    afterMutation();
+  }
+
+  async function move(item: TemplateItemLite, direction: "up" | "down") {
+    setBusyItemId(item.id);
+    const res = await moveTemplateItem({ itemId: item.id, direction });
+    setBusyItemId(null);
+    if (res.error) toast.error(res.error);
+    else afterMutation();
+  }
+
+  async function confirmRemoveItem() {
+    const item = itemToRemove;
+    if (!item) return;
+    setItemToRemove(null);
+    setBusyItemId(item.id);
+    const res = await removeTemplateItem({ itemId: item.id });
+    setBusyItemId(null);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    // The two outcomes are genuinely different and the user must be told which
+    // happened: a RETIRED item leaves this template but stays on every deal
+    // already tracking it (0081 forbids hard-deleting a referenced item so live
+    // tracking is never orphaned). Reporting "deleted" for both would be a lie.
+    if (res.outcome === "retired") {
+      toast.success(
+        `Item retired. It stays on ${res.dealRefs} deal checklist${
+          res.dealRefs === 1 ? "" : "s"
+        } already tracking it.`
+      );
+    } else {
+      toast.success("Item deleted.");
+    }
+    afterMutation();
+  }
+
   return (
     <Sheet open={!!templateId} onOpenChange={(o) => !o && onClose()}>
       <SheetContent className="w-full sm:max-w-[680px] overflow-y-auto">
@@ -778,7 +915,22 @@ function DetailDrawer({
             </div>
           ) : (
             <div className="space-y-2">
-              {detail.items.map((item) => {
+              {/* EMPTY STATE. Before manual item editing existed this screen
+                  showed a bare empty list with no way forward — the dead end
+                  that left a live packet at zero items. */}
+              {detail.items.length === 0 && !addOpen && (
+                <div className="rounded-md border border-dashed border-nurock-border px-4 py-6 text-center">
+                  <div className="text-[13px] text-nurock-slate">
+                    This checklist has no items yet.
+                  </div>
+                  <div className="mt-1 text-[11.5px] text-nurock-slate-light">
+                    Add them one at a time below, or import a spreadsheet from
+                    the templates list.
+                  </div>
+                </div>
+              )}
+
+              {detail.items.map((item, idx) => {
                 const mapping = mapByExternal.get(item.id);
                 const mapped = mapping?.canonical ?? [];
                 const suggestions = isCanonical
@@ -793,19 +945,125 @@ function DetailDrawer({
                     key={item.id}
                     className="rounded-md border border-nurock-border p-3"
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="text-[13px] text-nurock-black">
-                        {item.code && (
-                          <span className="font-mono text-[11px] text-nurock-slate-light mr-1.5">
-                            {item.code}
-                          </span>
-                        )}
-                        {item.title}
-                        <span className="ml-2 text-[10px] text-nurock-slate-light">
-                          {categoryLabel(item.category)}
-                        </span>
+                    {editingId === item.id ? (
+                      <div className="space-y-2">
+                        <Input
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          placeholder="Item title"
+                          className="h-8 text-[13px]"
+                          autoFocus
+                        />
+                        <div className="flex items-center gap-2">
+                          <Select
+                            value={editCategory}
+                            onValueChange={setEditCategory}
+                          >
+                            <SelectTrigger className="h-8 text-[12px] flex-1">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {DILIGENCE_CATEGORIES.map((c) => (
+                                <SelectItem key={c.key} value={c.key}>
+                                  {c.label}
+                                </SelectItem>
+                              ))}
+                              {/* An imported item may carry a category outside
+                                  the canonical catalog (the importer falls back
+                                  to "imported"). Keep it selectable so editing
+                                  the title cannot silently recategorize it. */}
+                              {!DILIGENCE_CATEGORIES.some(
+                                (c) => c.key === item.category
+                              ) && (
+                                <SelectItem value={item.category}>
+                                  {categoryLabel(item.category)}
+                                </SelectItem>
+                              )}
+                            </SelectContent>
+                          </Select>
+                          <Input
+                            value={editCode}
+                            onChange={(e) => setEditCode(e.target.value)}
+                            placeholder="Code (optional)"
+                            className="h-8 text-[12px] w-[140px] font-mono"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            className="h-7 text-[12px]"
+                            onClick={() => submitEdit(item)}
+                            disabled={busyItemId === item.id}
+                          >
+                            {busyItemId === item.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5" />
+                            )}
+                            Save
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-[12px]"
+                            onClick={() => setEditingId(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-[13px] text-nurock-black">
+                          {item.code && (
+                            <span className="font-mono text-[11px] text-nurock-slate-light mr-1.5">
+                              {item.code}
+                            </span>
+                          )}
+                          {item.title}
+                          <span className="ml-2 text-[10px] text-nurock-slate-light">
+                            {categoryLabel(item.category)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-0.5 flex-shrink-0">
+                          <button
+                            onClick={() => move(item, "up")}
+                            disabled={busyItemId === item.id || idx === 0}
+                            className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30 disabled:hover:text-nurock-slate-light"
+                            title="Move up"
+                          >
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => move(item, "down")}
+                            disabled={
+                              busyItemId === item.id ||
+                              idx === detail.items.length - 1
+                            }
+                            className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30 disabled:hover:text-nurock-slate-light"
+                            title="Move down"
+                          >
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => beginEdit(item)}
+                            disabled={busyItemId === item.id}
+                            className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30"
+                            title="Edit this item"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setItemToRemove(item)}
+                            disabled={busyItemId === item.id}
+                            className="p-1 text-nurock-slate-light hover:text-red-600 disabled:opacity-30"
+                            title="Remove this item"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     {!isCanonical && (
                       <div className="mt-2 space-y-2">
@@ -891,10 +1149,104 @@ function DetailDrawer({
                   </div>
                 );
               })}
+
+              {/* ---------------------------------------------------------
+                  ADD AN ITEM. Kept at the bottom so it reads as "append",
+                  which is what it does — addTemplateItem assigns max+1.
+                  --------------------------------------------------------- */}
+              {addOpen ? (
+                <div className="rounded-md border border-nurock-navy/30 bg-nurock-navy/[0.02] p-3 space-y-2">
+                  <Input
+                    value={newTitle}
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    placeholder="Item title (e.g. Executed LP Agreement)"
+                    className="h-8 text-[13px]"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") submitAdd();
+                      if (e.key === "Escape") resetAdd();
+                    }}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Select value={newCategory} onValueChange={setNewCategory}>
+                      <SelectTrigger className="h-8 text-[12px] flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DILIGENCE_CATEGORIES.map((c) => (
+                          <SelectItem key={c.key} value={c.key}>
+                            {c.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      value={newCode}
+                      onChange={(e) => setNewCode(e.target.value)}
+                      placeholder="Code (optional)"
+                      className="h-8 text-[12px] w-[140px] font-mono"
+                    />
+                  </div>
+                  {isCanonical && (
+                    <div className="text-[11px] text-nurock-tan-dark">
+                      This is the NuRock standard checklist — a new item appears
+                      on every deal using it.
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      className="h-7 text-[12px]"
+                      onClick={submitAdd}
+                      disabled={busyItemId === "new" || !newTitle.trim()}
+                    >
+                      {busyItemId === "new" ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Plus className="w-3.5 h-3.5" />
+                      )}
+                      Add item
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-[12px]"
+                      onClick={resetAdd}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setAddOpen(true)}
+                  className="w-full rounded-md border border-dashed border-nurock-border px-3 py-2 text-[12px] text-nurock-slate hover:border-nurock-navy/40 hover:bg-nurock-gray inline-flex items-center justify-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add an item
+                </button>
+              )}
             </div>
           )}
         </div>
       </SheetContent>
+
+      {/* Retire / delete confirmation. The copy cannot promise which of the two
+          happens, because that depends on whether a deal already tracks the
+          item — the action decides and reports back. */}
+      <ConfirmDialog
+        open={!!itemToRemove}
+        onOpenChange={(o) => !o && setItemToRemove(null)}
+        title="Remove this checklist item?"
+        description={
+          itemToRemove
+            ? `"${itemToRemove.title}" will be removed from this checklist. If any deal is already tracking it, the item is retired instead of deleted so that deal keeps its history.`
+            : ""
+        }
+        confirmLabel="Remove item"
+        destructive
+        onConfirm={confirmRemoveItem}
+      />
     </Sheet>
   );
 }

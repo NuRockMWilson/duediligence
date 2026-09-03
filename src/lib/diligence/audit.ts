@@ -15,7 +15,16 @@ export type DiligenceAuditEventType =
   | "document_unlinked"
   | "template_imported"
   | "packet_attached"
-  | "packet_removed";
+  | "packet_removed"
+  // Manual catalog edits (settings → diligence templates). The DB column is
+  // free text and 0098's header says the viewer "renders unknown types
+  // generically", so these are additive — but they belong in the union so a
+  // typo in an eventType is a compile error rather than an orphan row nobody
+  // can filter on later.
+  | "template_item_added"
+  | "template_item_updated"
+  | "template_item_deleted"
+  | "template_item_retired";
 
 export interface DiligenceAuditEvent {
   /** Null for org-level events (e.g. template imports in Settings). */
