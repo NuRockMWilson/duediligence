@@ -213,6 +213,40 @@ export async function assertDiligenceCan(action: ActionKey): Promise<void> {
   );
 }
 
+/**
+ * The same decision assertDiligenceCan makes, RETURNED instead of thrown.
+ *
+ * WHY BOTH FORMS EXIST. A guard that throws inside a server action cannot tell
+ * the user why they were refused: Next sanitizes server-action errors in
+ * production, so the browser receives a digest, not the message. The live
+ * session named the consequence exactly — "a guard firing and a bug look
+ * identical from the browser" — and that ambiguity cost a whole round of export
+ * investigation in the devmgmt app.
+ *
+ * Every export action here already returns `{ base64, filename } | { error }`
+ * and every caller already renders that error as a toast, so a refusal routed
+ * through the RETURN path arrives as a sentence using machinery that exists, and
+ * no button needs to change.
+ *
+ * THE LOGIC IS IDENTICAL TO assertDiligenceCan AND MUST STAY THAT WAY — two
+ * expressions of one rule is how they drift, and the fail-open case is the one
+ * that would be quietly lost:
+ *   org admin                -> true
+ *   no role in EITHER module -> TRUE (bootstrap safety; the module gate decides)
+ *   holds a role             -> either module's role must grant the action
+ */
+export async function canDiligence(action: ActionKey): Promise<boolean> {
+  const access = await getCurrentUserAccess();
+  if (!access || access.isOrgAdmin) return true;
+  if (access.roles["diligence"] == null && access.roles["devmgmt"] == null) {
+    return true;
+  }
+  return (
+    hasPermission(access, "diligence", action) ||
+    hasPermission(access, "devmgmt", action)
+  );
+}
+
 /** Server-action guard for org-admin-only operations (user management). */
 export async function requireOrgAdmin(): Promise<UserAccess> {
   const access = await getCurrentUserAccess();

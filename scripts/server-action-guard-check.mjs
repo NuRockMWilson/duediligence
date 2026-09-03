@@ -63,9 +63,75 @@ const WRITE_BASELINE = process.argv.includes("--write-baseline");
 // don't re-add it wholesale.
 const GUARD_CALLS = [
   "assertDiligenceCan(",
+  // The RETURNING form of the same decision, identical logic, used by the four
+  // export actions. Next sanitizes server-action errors in production, so a
+  // THROWN refusal reaches the browser as an opaque digest and "a guard fired"
+  // becomes indistinguishable from "the export is broken" — which cost a full
+  // round of investigation in the devmgmt app. Exports already return
+  // `{ base64 } | { error }` and every caller toasts the error, so the refusal
+  // arrives as a sentence. It is a guard, and it counts as one.
+  "canDiligence(",
   "requireOrgAdmin(",
   "requirePermission(",
 ];
+
+// A GUARD HELPER DEFINED IN THE SAME FILE ALSO COUNTS.
+//
+// PORTED FROM nurock-devmgmt 2026-09-03, where this exact omission produced SIX
+// false positives on settings/team/actions.ts. The same six were sitting in this
+// repo's baseline: team/actions.ts defines its own `requireAdmin()` (org admin,
+// with the legacy is_cfo fallback) and every one of its exports calls it. The
+// gate only matched IMPORTED names, so it reported six unguarded POST endpoints
+// that were in fact correctly gated — and a baseline that cries wolf is a
+// baseline someone eventually stops reading.
+//
+// RECOGNISED CONSERVATIVELY, on two conditions that must BOTH hold:
+//   1. the helper is DEFINED IN THIS FILE. An imported guard-shaped name does
+//      not count — that is what stops a deal-STAGE guard from being read as an
+//      authorization one.
+//   2. its body actually reaches the auth layer. A local helper named
+//      requireFoo() that never consults auth does not count.
+const LOCAL_GUARD_DEF =
+  /^\s*(?:export\s+)?(?:async\s+)?function\s+((?:require|assert|ensure)\w*)\s*\(/gm;
+const AUTH_TOUCH =
+  /getCurrentUserAccess|getAuthedUser|auth\.getUser|isOrgAdmin|hasPermission/;
+
+/** Same-file guard helpers whose bodies reach the auth layer. */
+function localAuthGuards(text) {
+  const found = [];
+  LOCAL_GUARD_DEF.lastIndex = 0;
+  let m;
+  while ((m = LOCAL_GUARD_DEF.exec(text)) !== null) {
+    // A body WINDOW rather than brace matching: a guard that consults auth does
+    // so in its opening statements, and a window cannot run away over a file.
+    if (AUTH_TOUCH.test(text.slice(m.index, m.index + 1500))) found.push(m[1]);
+  }
+  return found;
+}
+
+// -----------------------------------------------------------------------------
+// NO_GUARD_NEEDED — a reviewed decision, not an unexamined gap.
+// -----------------------------------------------------------------------------
+// PORTED FROM nurock-devmgmt 2026-09-03. Kept SEPARATE from the baseline
+// deliberately: the baseline is debt to be paid down, this is a conclusion. An
+// entry here says someone looked and decided a role guard would add nothing.
+// Each needs a reason, and the reason has to name the mechanism that authorizes
+// the call instead.
+const NO_GUARD_NEEDED = new Map(
+  Object.entries({
+    // Owner-scoped writes. Both filter on recipient_user_id = the caller's own
+    // id AFTER a !user check, so the row set is already narrowed to rows the
+    // caller owns. That is authorization by OWNERSHIP rather than by role, which
+    // a textual scan cannot see. A role guard would be strictly worse than
+    // useless here: assertDiligenceCan fails OPEN for a roleless caller, so it
+    // would add a line that reads like protection and enforces nothing, while
+    // the ownership filter that IS doing the work looks incidental beside it.
+    "src/lib/notification-actions.ts::markNotificationRead":
+      "owner-scoped: .eq(recipient_user_id, user.id) after a !user check",
+    "src/lib/notification-actions.ts::markAllNotificationsRead":
+      "owner-scoped: .eq(recipient_user_id, user.id) after a !user check",
+  })
+);
 
 // …as does an explicit role-flag test, which is how the draw ladder gates: the
 // app_users.is_pm / is_cfo booleans, which are the SAME two columns the
@@ -142,6 +208,8 @@ const guarded = [];
 const newlyUnguarded = [];
 const baselined = [];
 const fixedButListed = [];
+/** Actions authorized by something other than a role check — see NO_GUARD_NEEDED. */
+const reasoned = [];
 let serverFiles = 0;
 
 for (const abs of walk(SRC)) {
@@ -154,6 +222,8 @@ for (const abs of walk(SRC)) {
 
   const rel = relative(ROOT, abs).split(sep).join("/");
   const lines = text.split("\n");
+  // Same-file guard helpers, resolved once per file rather than per action.
+  const localGuards = localAuthGuards(text).map((n) => `${n}(`);
 
   for (let i = 0; i < lines.length; i++) {
     const m = /^export async function ([A-Za-z0-9_]+)\s*\(/.exec(lines[i]);
@@ -162,13 +232,16 @@ for (const abs of walk(SRC)) {
     const body = bodyOf(lines, i);
     const hasGuard =
       GUARD_CALLS.some((g) => body.includes(g)) ||
-      ROLE_FLAG_TESTS.some((g) => body.includes(g));
+      ROLE_FLAG_TESTS.some((g) => body.includes(g)) ||
+      localGuards.some((g) => body.includes(g));
 
     if (hasGuard) {
       guarded.push(key);
       // Guarded but still listed → the baseline can shrink. Reported, never
       // failed: nagging about progress is how a gate gets switched off.
       if (BASELINE.has(key)) fixedButListed.push(key);
+    } else if (NO_GUARD_NEEDED.has(key)) {
+      reasoned.push(key);
     } else if (BASELINE.has(key)) {
       baselined.push(key);
     } else {
@@ -201,10 +274,12 @@ if (WRITE_BASELINE) {
   process.exit(0);
 }
 
-const total = guarded.length + newlyUnguarded.length + baselined.length;
+const total =
+  guarded.length + newlyUnguarded.length + baselined.length + reasoned.length;
 console.log(
   `server-action-guard-check — ${serverFiles} "use server" file(s), ` +
     `${total} exported action(s): ${guarded.length} guarded, ` +
+    `${reasoned.length} authorized by ownership (NO_GUARD_NEEDED), ` +
     `${baselined.length} baselined-unguarded, ${newlyUnguarded.length} new`
 );
 console.log(

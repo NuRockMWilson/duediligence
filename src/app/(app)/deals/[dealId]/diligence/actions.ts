@@ -50,7 +50,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { assertDiligenceCan } from "@/lib/auth/access";
+import { assertDiligenceCan, canDiligence } from "@/lib/auth/access";
 import { sendNotification } from "@/lib/notifications";
 import {
   getStorageProvider,
@@ -96,6 +96,7 @@ export async function setDiligenceStatus(input: {
   status: DiligenceStatus;
   waivedReason?: string | null;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   if (input.dealItemIds.length === 0) return {};
   if (input.status === "approved") {
     return {
@@ -215,6 +216,7 @@ export async function setDiligenceDueDate(input: {
   dealItemId: string;
   dueDate: string | null; // ISO yyyy-mm-dd
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = await createClient();
   const sb = supabase as AnySb;
   const { error } = await sb
@@ -239,6 +241,7 @@ export async function setDiligenceCompletedDate(input: {
   dealItemId: string;
   completedDate: string | null; // ISO yyyy-mm-dd
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = await createClient();
   const sb = supabase as AnySb;
   const { error } = await sb
@@ -259,6 +262,7 @@ export async function setDiligenceNotes(input: {
   dealItemId: string;
   notes: string | null;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = await createClient();
   const sb = supabase as AnySb;
   const { error } = await sb
@@ -279,6 +283,7 @@ export async function setDiligenceRequired(input: {
   dealItemIds: string[];
   isRequired: boolean;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   if (input.dealItemIds.length === 0) return {};
   const supabase = await createClient();
   const sb = supabase as AnySb;
@@ -298,6 +303,7 @@ export async function setDiligenceRequired(input: {
 export async function uploadDiligenceDocument(
   formData: FormData
 ): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const dealId = formData.get("dealId") as string;
   const dealItemId = formData.get("dealItemId") as string;
   const dealName = (formData.get("dealName") as string) || "Deal";
@@ -397,6 +403,7 @@ export async function linkDiligenceDocument(input: {
   dealItemId: string;
   documentId: string;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = await createClient();
   const {
     data: { user },
@@ -433,6 +440,7 @@ export async function unlinkDiligenceDocument(input: {
   dealItemId: string;
   documentId: string;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = await createClient();
   const sb = supabase as AnySb;
 
@@ -505,6 +513,7 @@ export async function setDiligenceDocumentRequirement(input: {
   dealItemId: string;
   mode: "all" | "any";
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = await createClient();
   const sb = supabase as AnySb;
   const { error } = await sb
@@ -545,6 +554,7 @@ export async function addDiligenceExpectedDoc(input: {
   dealItemId: string;
   label: string;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const label = input.label.trim();
   if (!label) return { error: "Give the expected document a name." };
   const supabase = await createClient();
@@ -574,6 +584,7 @@ export async function removeDiligenceExpectedDoc(input: {
   dealId: string;
   expectedDocId: string;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = await createClient();
   const sb = supabase as AnySb;
   const { error } = await sb
@@ -593,6 +604,7 @@ export async function assignDiligenceExpectedDoc(input: {
   expectedDocId: string;
   documentId: string | null;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = await createClient();
   const sb = supabase as AnySb;
 
@@ -626,6 +638,7 @@ export async function getDiligenceDocSignedUrl(input: {
   filePath: string;
   expiresInSeconds?: number;
 }): Promise<{ signedUrl?: string; error?: string }> {
+  await assertDiligenceCan("view");
   try {
     const signedUrl = await getStorageProvider().signedUrl(
       input.filePath,
@@ -797,6 +810,7 @@ export async function recordDiligenceSignoff(input: {
   decision: "approved" | "rejected";
   comment?: string | null;
 }): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
   const supabase = await createClient();
   const {
     data: { user },
@@ -1028,6 +1042,9 @@ export async function exportDiligencePacket(input: {
   dealId: string;
   includeDocs: boolean;
 }): Promise<{ base64?: string; filename?: string; mime?: string; error?: string }> {
+  if (!(await canDiligence("export"))) {
+    return { error: "Your role doesn't allow exporting from Due Diligence." };
+  }
   try {
     const [checklist, financiers] = await Promise.all([
       getDiligenceChecklist(input.dealId),
@@ -1103,6 +1120,9 @@ export async function exportFinancierPacket(input: {
   dealId: string;
   templateId: string;
 }): Promise<{ base64?: string; filename?: string; mime?: string; error?: string }> {
+  if (!(await canDiligence("export"))) {
+    return { error: "Your role doesn't allow exporting from Due Diligence." };
+  }
   try {
     const [checklist, financiers] = await Promise.all([
       getDiligenceChecklist(input.dealId),

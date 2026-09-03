@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { assertDiligenceCan } from "@/lib/auth/access";
 
 // ============================================================================
 // Invoice drill-down — on-demand fetch for clickable actuals
@@ -51,6 +52,10 @@ export async function getInvoicesForGls(
   glAccounts: string[],
   filterToPaid: boolean = false
 ): Promise<InvoicesForLineResult> {
+  // Returns real invoice rows and amounts for a deal, so it takes the deal-read
+  // floor. As a bare "use server" export, a POST with any dealId and a GL list
+  // handed that deal's invoice detail to any authenticated caller.
+  await assertDiligenceCan("view");
   if (!dealId || glAccounts.length === 0) {
     return EMPTY_RESULT;
   }

@@ -8,6 +8,7 @@
 // =============================================================================
 
 import { getPortfolioRollup } from "@/lib/data/portfolio-rollup";
+import { canDiligence } from "@/lib/auth/access";
 import { buildCsvBase64, type CsvCell } from "@/lib/export/csv";
 import { MIME } from "@/lib/export/download";
 import {
@@ -39,6 +40,9 @@ function fmtMonthYear(iso: string | null): string {
 export async function exportPortfolioCsv(): Promise<
   { base64: string; filename: string; mime: string } | { error: string }
 > {
+  if (!(await canDiligence("export"))) {
+    return { error: "Your role doesn't allow exporting the portfolio." };
+  }
   try {
     const { deals, totals } = await getPortfolioRollup();
     const headers = [
@@ -99,6 +103,9 @@ export async function exportPortfolioCsv(): Promise<
 export async function exportPortfolioPdf(): Promise<
   { base64: string; filename: string; mime: string } | { error: string }
 > {
+  if (!(await canDiligence("export"))) {
+    return { error: "Your role doesn't allow exporting the portfolio." };
+  }
   try {
     const { deals, totals } = await getPortfolioRollup();
     const brand = await createBrandedPdf();
