@@ -175,6 +175,12 @@ export async function ensureDealDiligenceItems(
     .map((r) => r.template_id)
     .filter((id) => id !== templateId);
   let standalone: Array<{ id: string; default_required: boolean }> = [];
+  // Per-entity rows (ASK 2): the same catalog item once per named entity.
+  const entityScoped: Array<{
+    id: string;
+    default_required: boolean;
+    entity_id: string;
+  }> = [];
   if (adoptedExternal.length > 0) {
     // =======================================================================
     // AN UNREADABLE CROSSWALK MUST NOT LOOK LIKE AN EMPTY ONE. THIS IS A WRITE.
@@ -219,17 +225,122 @@ export async function ensureDealDiligenceItems(
     );
     const { data: extItems } = await supabase
       .from("nurock_diligence_items")
-      .select("id, default_required")
+      .select("id, default_required, group_id")
       .in("template_id", adoptedExternal)
       .eq("is_active", true);
-    standalone = ((extItems ?? []) as Array<{
+    const extRows = (extItems ?? []) as Array<{
       id: string;
       default_required: boolean;
-    }>).filter((i) => !mappedSet.has(i.id) && !have.has(i.id));
+      group_id: string | null;
+    }>;
+
+    // =======================================================================
+    // PER-ENTITY INSTANTIATION (ASK 2)
+    // =======================================================================
+    // A group flagged is_entity_parameterized repeats once per named entity of
+    // its entity_role. PNC's section 1 has guarantors i/ii/iii as separate
+    // blocks with their own item lists, and a deal is not closed until EACH
+    // guarantor's documents are in — so each gets its own tracked row, its own
+    // assignee, its own documents and its own sign-off chain.
+    //
+    // ITEMS IN A PARAMETERIZED GROUP ARE INSTANTIATED PER ENTITY REGARDLESS OF
+    // CROSSWALK MAPPING, and that is a deliberate departure from the rule above.
+    // The standalone rule keeps a MAPPED packet item virtual because its
+    // coverage flows through the canonical item that satisfies it. But one
+    // canonical item cannot represent three guarantors: approving "Guarantor
+    // Financials" once would satisfy all three, which is the fabricated record
+    // this whole design exists to prevent. Per-entity tracking wins over
+    // coverage-through-mapping wherever the two conflict.
+    //
+    // FLAGGED FOR MICHAEL: that means a crosswalk mapping on an item inside a
+    // parameterized group has no effect on how it is tracked. It still counts
+    // toward the packet's coverage percentage, which now aggregates several
+    // entity instances behind one canonical item — a number worth a second look
+    // once real per-entity data exists.
+    const [{ data: dealEnts }, { data: paramGroups }] = await Promise.all([
+      supabase
+        .from("dm_diligence_deal_entities")
+        .select("entity_id, sort_order, nurock_diligence_entities ( role_key )")
+        .eq("deal_id", dealId),
+      supabase
+        .from("nurock_diligence_item_groups")
+        .select("id, entity_role")
+        .in("template_id", adoptedExternal)
+        .eq("is_entity_parameterized", true),
+    ]);
+
+    type DealEntRow = {
+      entity_id: string;
+      sort_order: number;
+      nurock_diligence_entities: { role_key: string } | null;
+    };
+    const entitiesByRole = new Map<string, string[]>();
+    for (const e of (dealEnts ?? []) as DealEntRow[]) {
+      const role = e.nurock_diligence_entities?.role_key;
+      if (!role) continue;
+      const arr = entitiesByRole.get(role) ?? [];
+      arr.push(e.entity_id);
+      entitiesByRole.set(role, arr);
+    }
+
+    const paramGroupRole = new Map<string, string>();
+    for (const g of (paramGroups ?? []) as Array<{
+      id: string;
+      entity_role: string | null;
+    }>) {
+      if (g.entity_role) paramGroupRole.set(g.id, g.entity_role);
+    }
+
+    // A parameterized-group item must NOT also be instantiated unscoped, or the
+    // checklist would show a headless copy beside the per-entity ones. So these
+    // are excluded from `standalone` rather than added on top of it.
+    standalone = extRows.filter(
+      (i) =>
+        !mappedSet.has(i.id) &&
+        !have.has(i.id) &&
+        !(i.group_id != null && paramGroupRole.has(i.group_id))
+    );
+
+    if (paramGroupRole.size > 0 && entitiesByRole.size > 0) {
+      // Existing (item, entity) pairs, so repeated page loads do not duplicate.
+      // The partial unique index would refuse a duplicate anyway, but an INSERT
+      // that throws would take the whole self-healing pass down with it.
+      const { data: existingEnt } = await supabase
+        .from("dm_diligence_deal_items")
+        .select("item_id, entity_id")
+        .eq("deal_id", dealId)
+        .not("entity_id", "is", null);
+      const havePair = new Set(
+        ((existingEnt ?? []) as Array<{ item_id: string; entity_id: string }>).map(
+          (r) => `${r.item_id}|${r.entity_id}`
+        )
+      );
+
+      for (const item of extRows) {
+        if (item.group_id == null) continue;
+        const role = paramGroupRole.get(item.group_id);
+        if (!role) continue;
+        for (const entityId of entitiesByRole.get(role) ?? []) {
+          if (havePair.has(`${item.id}|${entityId}`)) continue;
+          entityScoped.push({
+            id: item.id,
+            default_required: item.default_required,
+            entity_id: entityId,
+          });
+        }
+      }
+    }
     }
   }
 
-  const toInsert = [...missing, ...standalone];
+  // entity_id is sent as NULL for the unscoped rows rather than omitted, so one
+  // insert covers both shapes and the partial unique indexes see the value they
+  // are predicated on.
+  const toInsert: Array<{
+    id: string;
+    default_required: boolean;
+    entity_id?: string;
+  }> = [...missing, ...standalone, ...entityScoped];
   if (toInsert.length === 0) return 0;
 
   const { error } = await supabase.from("dm_diligence_deal_items").insert(
@@ -237,6 +348,7 @@ export async function ensureDealDiligenceItems(
       deal_id: dealId,
       item_id: m.id,
       is_required: m.default_required ?? true,
+      entity_id: m.entity_id ?? null,
     }))
   );
   if (error) {
