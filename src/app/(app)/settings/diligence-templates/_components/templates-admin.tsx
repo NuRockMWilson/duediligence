@@ -87,6 +87,13 @@ import {
   restoreTemplateItem,
   moveTemplateItem,
 } from "../item-actions";
+import {
+  addTemplateGroup,
+  updateTemplateGroup,
+  moveTemplateGroup,
+  deleteTemplateGroup,
+  setTemplateItemGroup,
+} from "../group-actions";
 
 const KIND_LABEL: Record<TemplateKind, string> = {
   nurock_standard: "Canonical",
@@ -769,6 +776,393 @@ function DetailDrawer({
   const isCanonical = detail?.template.isCanonical ?? false;
 
   // ---------------------------------------------------------------------------
+  // BANDS (ASK 6). One band per template-owned section, in the read layer's
+  // display order, then the UNGROUPED band last.
+  // ---------------------------------------------------------------------------
+  // Why bands rather than filtering inside the item loop: reorder is
+  // WITHIN-GROUP, so the first/last disabling of the move controls has to be
+  // relative to the band, not to detail.items. Computing the band once and
+  // passing its length to the renderer keeps the UI's idea of "first" identical
+  // to the server's, which resolves the neighbour by shared group_id.
+  //
+  // The ungrouped band is LAST and only rendered when it has items or when the
+  // template has no sections at all — a template nobody has grouped should look
+  // exactly as it did before this feature, not gain an "Ungrouped" heading.
+  const bands = React.useMemo(() => {
+    const groups = detail?.groups ?? [];
+    const items = detail?.items ?? [];
+    const out: Array<{
+      group: (typeof groups)[number] | null;
+      items: typeof items;
+    }> = [];
+    for (const g of groups) {
+      out.push({ group: g, items: items.filter((i) => i.groupId === g.id) });
+    }
+    const ungrouped = items.filter(
+      (i) => i.groupId == null || !groups.some((g) => g.id === i.groupId)
+    );
+    // `!groups.some(...)` catches an item whose group vanished between the two
+    // reads — it must still render somewhere rather than disappear.
+    if (ungrouped.length > 0 || groups.length === 0) {
+      out.push({ group: null, items: ungrouped });
+    }
+    return out;
+  }, [detail]);
+
+  const [groupAddParent, setGroupAddParent] = React.useState<
+    string | null | undefined
+  >(undefined); // undefined = closed, null = adding a top-level section
+  const [groupLabel, setGroupLabel] = React.useState("");
+  const [groupCode, setGroupCode] = React.useState("");
+  const [editingGroupId, setEditingGroupId] = React.useState<string | null>(null);
+  const [busyGroupId, setBusyGroupId] = React.useState<string | null>(null);
+  const [groupToDelete, setGroupToDelete] = React.useState<
+    { id: string; label: string; itemCount: number } | null
+  >(null);
+
+  function resetGroupForm() {
+    setGroupAddParent(undefined);
+    setGroupLabel("");
+    setGroupCode("");
+  }
+
+  async function submitGroup() {
+    if (!templateId || groupAddParent === undefined || !groupLabel.trim()) return;
+    setBusyGroupId("new");
+    const res = await addTemplateGroup({
+      templateId,
+      label: groupLabel,
+      code: groupCode.trim() || null,
+      parentGroupId: groupAddParent,
+    });
+    setBusyGroupId(null);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success(groupAddParent === null ? "Section added." : "Subsection added.");
+    resetGroupForm();
+    afterMutation();
+  }
+
+  async function submitGroupEdit(groupId: string) {
+    if (!groupLabel.trim()) {
+      toast.error("Give the section a name.");
+      return;
+    }
+    setBusyGroupId(groupId);
+    const res = await updateTemplateGroup({
+      groupId,
+      label: groupLabel,
+      code: groupCode.trim() || null,
+    });
+    setBusyGroupId(null);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    setEditingGroupId(null);
+    toast.success("Section updated.");
+    afterMutation();
+  }
+
+  async function moveGroup(groupId: string, direction: "up" | "down") {
+    setBusyGroupId(groupId);
+    const res = await moveTemplateGroup({ groupId, direction });
+    setBusyGroupId(null);
+    if (res.error) toast.error(res.error);
+    else afterMutation();
+  }
+
+  async function confirmDeleteGroup() {
+    const g = groupToDelete;
+    if (!g) return;
+    setGroupToDelete(null);
+    setBusyGroupId(g.id);
+    const res = await deleteTemplateGroup({ groupId: g.id });
+    setBusyGroupId(null);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    // Say what happened to the ITEMS, because that is the part a user worries
+    // about: the section is gone, its requirements are not.
+    const kept = res.detachedItems ?? 0;
+    const subs = res.removedSubsections ?? 0;
+    toast.success(
+      kept > 0
+        ? `Section deleted. ${kept} item${kept === 1 ? "" : "s"} kept and moved to Ungrouped.`
+        : subs > 0
+          ? `Section deleted, along with ${subs} subsection${subs === 1 ? "" : "s"}.`
+          : "Section deleted."
+    );
+    afterMutation();
+  }
+
+  async function fileItem(itemId: string, groupId: string | null) {
+    setBusyItemId(itemId);
+    const res = await setTemplateItemGroup({ itemId, groupId });
+    setBusyItemId(null);
+    if (res.error) toast.error(res.error);
+    else afterMutation();
+  }
+
+  const renderItemCard = (
+    item: TemplateItemLite,
+    idx: number,
+    bandLength: number
+  ) => {
+                const mapping = mapByExternal.get(item.id);
+                const mapped = mapping?.canonical ?? [];
+                const suggestions = isCanonical
+                  ? []
+                  : suggestCanonicalMatches(
+                      item.title,
+                      canonicalItems.map((c) => ({ id: c.id, title: c.title }))
+                    ).filter((s) => !mapped.includes(s.id));
+
+                return (
+                  <div
+                    key={item.id}
+                    className="rounded-md border border-nurock-border p-3"
+                  >
+                    {editingId === item.id ? (
+                      <div className="space-y-2">
+                        <Input
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          placeholder="Item title"
+                          className="h-8 text-[13px]"
+                          autoFocus
+                        />
+                        <div className="flex items-center gap-2">
+                          <Select
+                            value={editCategory}
+                            onValueChange={setEditCategory}
+                          >
+                            <SelectTrigger className="h-8 text-[12px] flex-1">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {DILIGENCE_CATEGORIES.map((c) => (
+                                <SelectItem key={c.key} value={c.key}>
+                                  {c.label}
+                                </SelectItem>
+                              ))}
+                              {/* An imported item may carry a category outside
+                                  the canonical catalog (the importer falls back
+                                  to "imported"). Keep it selectable so editing
+                                  the title cannot silently recategorize it. */}
+                              {!DILIGENCE_CATEGORIES.some(
+                                (c) => c.key === item.category
+                              ) && (
+                                <SelectItem value={item.category}>
+                                  {categoryLabel(item.category)}
+                                </SelectItem>
+                              )}
+                            </SelectContent>
+                          </Select>
+                          <Input
+                            value={editCode}
+                            onChange={(e) => setEditCode(e.target.value)}
+                            placeholder="Code (optional)"
+                            className="h-8 text-[12px] w-[140px] font-mono"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            className="h-7 text-[12px]"
+                            onClick={() => submitEdit(item)}
+                            disabled={busyItemId === item.id}
+                          >
+                            {busyItemId === item.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5" />
+                            )}
+                            Save
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-[12px]"
+                            onClick={() => setEditingId(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-[13px] text-nurock-black">
+                          {item.code && (
+                            <span className="font-mono text-[11px] text-nurock-slate-light mr-1.5">
+                              {item.code}
+                            </span>
+                          )}
+                          {item.title}
+                          <span className="ml-2 text-[10px] text-nurock-slate-light">
+                            {categoryLabel(item.category)}
+                          </span>
+                          {/* SECTION PICKER (ASK 6). Only shown once the
+                              template HAS sections — offering "file into a
+                              section" on a template with none would be a
+                              control with an empty menu. `category` is
+                              untouched and still shown beside this: the
+                              canonical LIHTC grouping and the financier's own
+                              structure are different facts about one item, and
+                              conflating them is what this feature exists to
+                              avoid. */}
+                          {(detail?.groups?.length ?? 0) > 0 && (
+                            <Select
+                              value={item.groupId ?? NONE}
+                              onValueChange={(v) =>
+                                fileItem(item.id, v === NONE ? null : v)
+                              }
+                            >
+                              <SelectTrigger className="h-6 text-[10.5px] w-auto min-w-[130px] ml-2 inline-flex">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value={NONE}>Ungrouped</SelectItem>
+                                {(detail?.groups ?? []).map((g) => (
+                                  <SelectItem key={g.id} value={g.id}>
+                                    {" ".repeat(g.depth * 2)}
+                                    {g.code ? `${g.code} · ` : ""}
+                                    {g.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-0.5 flex-shrink-0">
+                          <button
+                            onClick={() => move(item, "up")}
+                            disabled={busyItemId === item.id || idx === 0}
+                            className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30 disabled:hover:text-nurock-slate-light"
+                            title="Move up"
+                          >
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => move(item, "down")}
+                            disabled={
+                              busyItemId === item.id ||
+                              idx === bandLength - 1
+                            }
+                            className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30 disabled:hover:text-nurock-slate-light"
+                            title="Move down"
+                          >
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => beginEdit(item)}
+                            disabled={busyItemId === item.id}
+                            className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30"
+                            title="Edit this item"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setItemToRemove(item)}
+                            disabled={busyItemId === item.id}
+                            className="p-1 text-nurock-slate-light hover:text-red-600 disabled:opacity-30"
+                            title="Remove this item"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {!isCanonical && (
+                      <div className="mt-2 space-y-2">
+                        {/* Mapped canonical chips */}
+                        {mapped.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {mapped.map((cid) => (
+                              <span
+                                key={cid}
+                                className="inline-flex items-center gap-1 rounded-full bg-nurock-navy/[0.06] border border-nurock-navy/15 px-2 py-0.5 text-[11px] text-nurock-navy"
+                              >
+                                <Link2 className="w-3 h-3" />
+                                {canonicalById.get(cid)?.title ?? "item"}
+                                <button
+                                  onClick={() => removeMap(item.id, cid)}
+                                  className="text-nurock-slate-light hover:text-red-600"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
+                            ))}
+                            {mapped.length > 1 && (
+                              <span className="inline-flex items-center gap-1 text-[10.5px]">
+                                <button
+                                  onClick={() =>
+                                    changeMode(
+                                      item.id,
+                                      mapping?.mode === "any" ? "all" : "any"
+                                    )
+                                  }
+                                  className="rounded border border-nurock-border px-1.5 py-0.5 text-nurock-slate hover:bg-nurock-gray"
+                                  title="How mapped items combine"
+                                >
+                                  needs {mapping?.mode === "any" ? "ANY" : "ALL"}
+                                </button>
+                              </span>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Suggestions */}
+                        {suggestions.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Sparkles className="w-3 h-3 text-nurock-tan-dark" />
+                            {suggestions.map((s) => (
+                              <button
+                                key={s.id}
+                                onClick={() => addMap(item.id, s.id)}
+                                className="inline-flex items-center gap-1 rounded-full border border-dashed border-nurock-tan-dark/50 bg-nurock-tan/10 px-2 py-0.5 text-[11px] text-nurock-tan-dark hover:bg-nurock-tan/20"
+                                title={`Suggested match (${Math.round(s.score * 100)}%)`}
+                              >
+                                <Plus className="w-3 h-3" />
+                                {canonicalById.get(s.id)?.title ?? "item"}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Add picker */}
+                        <Select
+                          value={NONE}
+                          onValueChange={(v) => {
+                            if (v !== NONE) addMap(item.id, v);
+                          }}
+                        >
+                          <SelectTrigger className="h-8 text-[12px] w-full">
+                            <SelectValue placeholder="+ Map to a NuRock-standard item…">
+                              + Map to a NuRock-standard item…
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {canonicalItems
+                              .filter((c) => !mapped.includes(c.id))
+                              .map((c) => (
+                                <SelectItem key={c.id} value={c.id}>
+                                  {c.itemNumber} · {c.title}
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                  </div>
+                );
+  };
+
+  // ---------------------------------------------------------------------------
   // Manual item editing (ASK 1). Until now items could only arrive by import,
   // so a manually created packet had no way to receive one — the live empty
   // "PNC Bank - Equity" packet is exactly that dead end.
@@ -948,225 +1342,274 @@ function DetailDrawer({
                 </div>
               )}
 
-              {detail.items.map((item, idx) => {
-                const mapping = mapByExternal.get(item.id);
-                const mapped = mapping?.canonical ?? [];
-                const suggestions = isCanonical
-                  ? []
-                  : suggestCanonicalMatches(
-                      item.title,
-                      canonicalItems.map((c) => ({ id: c.id, title: c.title }))
-                    ).filter((s) => !mapped.includes(s.id));
 
-                return (
-                  <div
-                    key={item.id}
-                    className="rounded-md border border-nurock-border p-3"
-                  >
-                    {editingId === item.id ? (
-                      <div className="space-y-2">
-                        <Input
-                          value={editTitle}
-                          onChange={(e) => setEditTitle(e.target.value)}
-                          placeholder="Item title"
-                          className="h-8 text-[13px]"
-                          autoFocus
-                        />
-                        <div className="flex items-center gap-2">
-                          <Select
-                            value={editCategory}
-                            onValueChange={setEditCategory}
-                          >
-                            <SelectTrigger className="h-8 text-[12px] flex-1">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {DILIGENCE_CATEGORIES.map((c) => (
-                                <SelectItem key={c.key} value={c.key}>
-                                  {c.label}
-                                </SelectItem>
-                              ))}
-                              {/* An imported item may carry a category outside
-                                  the canonical catalog (the importer falls back
-                                  to "imported"). Keep it selectable so editing
-                                  the title cannot silently recategorize it. */}
-                              {!DILIGENCE_CATEGORIES.some(
-                                (c) => c.key === item.category
-                              ) && (
-                                <SelectItem value={item.category}>
-                                  {categoryLabel(item.category)}
-                                </SelectItem>
-                              )}
-                            </SelectContent>
-                          </Select>
-                          <Input
-                            value={editCode}
-                            onChange={(e) => setEditCode(e.target.value)}
-                            placeholder="Code (optional)"
-                            className="h-8 text-[12px] w-[140px] font-mono"
-                          />
+              {/* ---------------------------------------------------------
+                  SECTIONS (ASK 6). One band per template-owned section, then
+                  the ungrouped band. A packet carries the FINANCIER'S OWN
+                  structure — PNC's 12 numbered sections and their subsections —
+                  which the canonical 15 categories cannot express.
+                  --------------------------------------------------------- */}
+              {bands.map((band) => (
+                <div
+                  key={band.group?.id ?? "__ungrouped__"}
+                  className="space-y-2"
+                  style={
+                    // Indent by depth. Inline rather than a Tailwind class
+                    // because the value is computed — a dynamic class name is
+                    // not in the compiled stylesheet and silently does nothing.
+                    band.group ? { marginLeft: band.group.depth * 14 } : undefined
+                  }
+                >
+                  {band.group && (
+                    <div className="flex items-start justify-between gap-2 pt-2">
+                      {editingGroupId === band.group.id ? (
+                        <div className="flex-1 space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={groupLabel}
+                              onChange={(e) => setGroupLabel(e.target.value)}
+                              placeholder="Section name"
+                              className="h-7 text-[12.5px] flex-1"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter")
+                                  submitGroupEdit(band.group!.id);
+                                if (e.key === "Escape") setEditingGroupId(null);
+                              }}
+                            />
+                            <Input
+                              value={groupCode}
+                              onChange={(e) => setGroupCode(e.target.value)}
+                              placeholder="No."
+                              className="h-7 text-[12px] w-[80px] font-mono"
+                            />
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <Button
+                              size="sm"
+                              className="h-6 text-[11.5px]"
+                              onClick={() => submitGroupEdit(band.group!.id)}
+                              disabled={busyGroupId === band.group.id}
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 text-[11.5px]"
+                              onClick={() => setEditingGroupId(null)}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            size="sm"
-                            className="h-7 text-[12px]"
-                            onClick={() => submitEdit(item)}
-                            disabled={busyItemId === item.id}
-                          >
-                            {busyItemId === item.id ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <Check className="w-3.5 h-3.5" />
+                      ) : (
+                        <>
+                          <h3 className="font-display text-[11.5px] uppercase tracking-wider text-nurock-slate flex items-baseline gap-1.5 min-w-0">
+                            {band.group.code && (
+                              <span className="font-mono text-[11px] text-nurock-slate-light">
+                                {band.group.code}
+                              </span>
                             )}
-                            Save
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 text-[12px]"
-                            onClick={() => setEditingId(null)}
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="text-[13px] text-nurock-black">
-                          {item.code && (
-                            <span className="font-mono text-[11px] text-nurock-slate-light mr-1.5">
-                              {item.code}
+                            <span className="truncate">{band.group.label}</span>
+                            {band.group.isEntityParameterized && (
+                              /* Declared for the per-entity work; nothing
+                                 replicates yet, so the badge says so rather
+                                 than implying behaviour that does not exist. */
+                              <span className="normal-case tracking-normal text-[10px] text-nurock-tan-dark">
+                                per {band.group.entityRole} (not yet replicated)
+                              </span>
+                            )}
+                            <span className="normal-case tracking-normal text-[10px] text-nurock-slate-light">
+                              {band.items.length}
                             </span>
-                          )}
-                          {item.title}
-                          <span className="ml-2 text-[10px] text-nurock-slate-light">
-                            {categoryLabel(item.category)}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-0.5 flex-shrink-0">
-                          <button
-                            onClick={() => move(item, "up")}
-                            disabled={busyItemId === item.id || idx === 0}
-                            className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30 disabled:hover:text-nurock-slate-light"
-                            title="Move up"
-                          >
-                            <ChevronUp className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => move(item, "down")}
-                            disabled={
-                              busyItemId === item.id ||
-                              idx === detail.items.length - 1
-                            }
-                            className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30 disabled:hover:text-nurock-slate-light"
-                            title="Move down"
-                          >
-                            <ChevronDown className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => beginEdit(item)}
-                            disabled={busyItemId === item.id}
-                            className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30"
-                            title="Edit this item"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => setItemToRemove(item)}
-                            disabled={busyItemId === item.id}
-                            className="p-1 text-nurock-slate-light hover:text-red-600 disabled:opacity-30"
-                            title="Remove this item"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {!isCanonical && (
-                      <div className="mt-2 space-y-2">
-                        {/* Mapped canonical chips */}
-                        {mapped.length > 0 && (
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            {mapped.map((cid) => (
-                              <span
-                                key={cid}
-                                className="inline-flex items-center gap-1 rounded-full bg-nurock-navy/[0.06] border border-nurock-navy/15 px-2 py-0.5 text-[11px] text-nurock-navy"
-                              >
-                                <Link2 className="w-3 h-3" />
-                                {canonicalById.get(cid)?.title ?? "item"}
-                                <button
-                                  onClick={() => removeMap(item.id, cid)}
-                                  className="text-nurock-slate-light hover:text-red-600"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              </span>
-                            ))}
-                            {mapped.length > 1 && (
-                              <span className="inline-flex items-center gap-1 text-[10.5px]">
-                                <button
-                                  onClick={() =>
-                                    changeMode(
-                                      item.id,
-                                      mapping?.mode === "any" ? "all" : "any"
-                                    )
-                                  }
-                                  className="rounded border border-nurock-border px-1.5 py-0.5 text-nurock-slate hover:bg-nurock-gray"
-                                  title="How mapped items combine"
-                                >
-                                  needs {mapping?.mode === "any" ? "ANY" : "ALL"}
-                                </button>
-                              </span>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Suggestions */}
-                        {suggestions.length > 0 && (
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <Sparkles className="w-3 h-3 text-nurock-tan-dark" />
-                            {suggestions.map((s) => (
+                          </h3>
+                          <div className="flex items-center gap-0.5 flex-shrink-0">
+                            <button
+                              onClick={() => moveGroup(band.group!.id, "up")}
+                              disabled={busyGroupId === band.group.id}
+                              className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30"
+                              title="Move section up"
+                            >
+                              <ChevronUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => moveGroup(band.group!.id, "down")}
+                              disabled={busyGroupId === band.group.id}
+                              className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30"
+                              title="Move section down"
+                            >
+                              <ChevronDown className="w-3.5 h-3.5" />
+                            </button>
+                            {/* Depth 2 is the ceiling the trigger enforces, so
+                                the control is hidden there rather than offering
+                                an action the database will refuse. */}
+                            {band.group.depth < 2 && (
                               <button
-                                key={s.id}
-                                onClick={() => addMap(item.id, s.id)}
-                                className="inline-flex items-center gap-1 rounded-full border border-dashed border-nurock-tan-dark/50 bg-nurock-tan/10 px-2 py-0.5 text-[11px] text-nurock-tan-dark hover:bg-nurock-tan/20"
-                                title={`Suggested match (${Math.round(s.score * 100)}%)`}
+                                onClick={() => {
+                                  setGroupAddParent(band.group!.id);
+                                  setGroupLabel("");
+                                  setGroupCode("");
+                                }}
+                                disabled={busyGroupId === band.group.id}
+                                className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30"
+                                title="Add a subsection"
                               >
-                                <Plus className="w-3 h-3" />
-                                {canonicalById.get(s.id)?.title ?? "item"}
+                                <Plus className="w-3.5 h-3.5" />
                               </button>
-                            ))}
+                            )}
+                            <button
+                              onClick={() => {
+                                setEditingGroupId(band.group!.id);
+                                setGroupLabel(band.group!.label);
+                                setGroupCode(band.group!.code ?? "");
+                              }}
+                              disabled={busyGroupId === band.group.id}
+                              className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30"
+                              title="Rename this section"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() =>
+                                setGroupToDelete({
+                                  id: band.group!.id,
+                                  label: band.group!.label,
+                                  itemCount: band.items.length,
+                                })
+                              }
+                              disabled={busyGroupId === band.group.id}
+                              className="p-1 text-nurock-slate-light hover:text-red-600 disabled:opacity-30"
+                              title="Delete this section (its items are kept)"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
-                        )}
+                        </>
+                      )}
+                    </div>
+                  )}
 
-                        {/* Add picker */}
-                        <Select
-                          value={NONE}
-                          onValueChange={(v) => {
-                            if (v !== NONE) addMap(item.id, v);
+                  {/* An "Ungrouped" label only when sections exist — otherwise
+                      an ungrouped template would sprout a heading it never had. */}
+                  {!band.group && (detail.groups?.length ?? 0) > 0 && (
+                    <h3 className="font-display text-[11.5px] uppercase tracking-wider text-nurock-slate-light pt-2">
+                      Ungrouped · {band.items.length}
+                    </h3>
+                  )}
+
+                  {band.group && band.items.length === 0 && (
+                    <div className="text-[11.5px] text-nurock-slate-light italic pl-1">
+                      No items in this section yet — file one using the
+                      &ldquo;Section&rdquo; picker on any item below.
+                    </div>
+                  )}
+
+                  {band.items.map((item, idx) =>
+                    renderItemCard(item, idx, band.items.length)
+                  )}
+
+                  {/* Inline subsection form, rendered under its parent. */}
+                  {groupAddParent === band.group?.id && band.group && (
+                    <div className="rounded-md border border-nurock-navy/30 bg-nurock-navy/[0.02] p-2.5 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={groupLabel}
+                          onChange={(e) => setGroupLabel(e.target.value)}
+                          placeholder="Subsection name (e.g. Title)"
+                          className="h-7 text-[12.5px] flex-1"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") submitGroup();
+                            if (e.key === "Escape") resetGroupForm();
                           }}
-                        >
-                          <SelectTrigger className="h-8 text-[12px] w-full">
-                            <SelectValue placeholder="+ Map to a NuRock-standard item…">
-                              + Map to a NuRock-standard item…
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {canonicalItems
-                              .filter((c) => !mapped.includes(c.id))
-                              .map((c) => (
-                                <SelectItem key={c.id} value={c.id}>
-                                  {c.itemNumber} · {c.title}
-                                </SelectItem>
-                              ))}
-                          </SelectContent>
-                        </Select>
+                        />
+                        <Input
+                          value={groupCode}
+                          onChange={(e) => setGroupCode(e.target.value)}
+                          placeholder="No."
+                          className="h-7 text-[12px] w-[80px] font-mono"
+                        />
                       </div>
-                    )}
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          size="sm"
+                          className="h-6 text-[11.5px]"
+                          onClick={submitGroup}
+                          disabled={busyGroupId === "new" || !groupLabel.trim()}
+                        >
+                          Add subsection
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 text-[11.5px]"
+                          onClick={resetGroupForm}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {/* Add a TOP-LEVEL section. */}
+              {groupAddParent === null ? (
+                <div className="rounded-md border border-nurock-navy/30 bg-nurock-navy/[0.02] p-2.5 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={groupLabel}
+                      onChange={(e) => setGroupLabel(e.target.value)}
+                      placeholder="Section name (e.g. Real Estate)"
+                      className="h-7 text-[12.5px] flex-1"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") submitGroup();
+                        if (e.key === "Escape") resetGroupForm();
+                      }}
+                    />
+                    <Input
+                      value={groupCode}
+                      onChange={(e) => setGroupCode(e.target.value)}
+                      placeholder="No."
+                      className="h-7 text-[12px] w-[80px] font-mono"
+                    />
                   </div>
-                );
-              })}
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      className="h-6 text-[11.5px]"
+                      onClick={submitGroup}
+                      disabled={busyGroupId === "new" || !groupLabel.trim()}
+                    >
+                      Add section
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-[11.5px]"
+                      onClick={resetGroupForm}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                groupAddParent === undefined && (
+                  <button
+                    onClick={() => {
+                      setGroupAddParent(null);
+                      setGroupLabel("");
+                      setGroupCode("");
+                    }}
+                    className="w-full rounded-md border border-dashed border-nurock-border px-3 py-1.5 text-[11.5px] text-nurock-slate-light hover:border-nurock-navy/40 hover:bg-nurock-gray inline-flex items-center justify-center gap-1.5"
+                  >
+                    <Plus className="w-3 h-3" />
+                    Add a section
+                  </button>
+                )
+              )}
 
               {/* ---------------------------------------------------------
                   ADD AN ITEM. Kept at the bottom so it reads as "append",
@@ -1327,6 +1770,30 @@ function DetailDrawer({
         confirmLabel="Remove item"
         destructive
         onConfirm={confirmRemoveItem}
+      />
+
+      {/* Section deletion. The copy leads with what happens to the ITEMS,
+          because that is the part worth being sure about: group_id is
+          ON DELETE SET NULL, so requirements survive and become ungrouped.
+          Subsections DO cascade, and that is stated rather than discovered. */}
+      <ConfirmDialog
+        open={!!groupToDelete}
+        onOpenChange={(o) => !o && setGroupToDelete(null)}
+        title="Delete this section?"
+        description={
+          groupToDelete
+            ? `"${groupToDelete.label}" will be removed from this checklist.${
+                groupToDelete.itemCount > 0
+                  ? ` Its ${groupToDelete.itemCount} item${
+                      groupToDelete.itemCount === 1 ? "" : "s"
+                    } are KEPT and moved to Ungrouped — no requirements are deleted.`
+                  : ""
+              } Any subsections inside it are removed with it.`
+            : ""
+        }
+        confirmLabel="Delete section"
+        destructive
+        onConfirm={confirmDeleteGroup}
       />
     </Sheet>
   );
