@@ -14,6 +14,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { OrgChartDialog } from "./org-chart-dialog";
+import {
+  getOrgChartRequirements,
+  type OrgChartRole,
+  type DealEntityRow,
+} from "../entity-actions";
 import {
   ClipboardList,
   Download,
@@ -505,16 +511,58 @@ export function DiligenceShell({
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // ADOPTION, VIA THE ORG CHART WHEN THE PACKET NEEDS ONE (ASK 2)
+  // ---------------------------------------------------------------------------
+  // A packet whose sections repeat per party cannot populate until the deal
+  // says who those parties are — that is Michael's spec: type the org chart
+  // BEFORE the template becomes a real list. So adoption checks first and, when
+  // there are repeating blocks, routes through the org-chart dialog.
+  //
+  // A packet with none adopts in exactly one click, as before. Making everyone
+  // walk through an empty org chart to attach an ordinary checklist would tax
+  // the common case for a feature most packets do not use.
+  //
+  // The check is a read, so a failure must not silently swallow the adoption:
+  // if it errors, say so and stop rather than attaching a packet that will look
+  // inexplicably empty.
+  const [orgChart, setOrgChart] = React.useState<{
+    templateId: string;
+    templateName: string;
+    roles: OrgChartRole[];
+    existing: DealEntityRow[];
+  } | null>(null);
+
   function adoptPacket(templateId: string) {
     startTransition(async () => {
-      const res = await adoptTemplateForDeal({ dealId, templateId });
-      if (res.error) {
-        toast.error(res.error);
+      const req = await getOrgChartRequirements({ dealId, templateId });
+      if (req.error) {
+        toast.error(req.error);
         return;
       }
-      toast.success("Packet added");
-      router.refresh();
+      if ((req.roles ?? []).length > 0) {
+        setOrgChart({
+          templateId,
+          templateName:
+            availableTemplates.find((t) => t.id === templateId)?.name ??
+            "This packet",
+          roles: req.roles ?? [],
+          existing: req.existing ?? [],
+        });
+        return;
+      }
+      await runAdopt(templateId);
     });
+  }
+
+  async function runAdopt(templateId: string) {
+    const res = await adoptTemplateForDeal({ dealId, templateId });
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success("Packet added");
+    router.refresh();
   }
 
   // Item 7: packet removal confirms via the app's standard modal (see
@@ -1309,6 +1357,36 @@ export function DiligenceShell({
           <CreateDialog open={createOpen} onOpenChange={setCreateOpen} />
           <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
         </>
+      )}
+
+      {/* ASK 2: the org chart stands between "add packet" and the packet
+          appearing, but only for packets whose sections repeat per party.
+          onDone runs the adoption itself, so a failed org-chart save never
+          leaves a packet attached with nothing to populate it. */}
+      {orgChart && (
+        <OrgChartDialog
+          // KEYED PER TEMPLATE so the form's initial rows are rebuilt for each
+          // packet. The dialog derives its rows from `roles` in a state
+          // initializer, which only runs on mount — without this key, opening
+          // it for a second packet with different roles would reuse the first
+          // packet's rows.
+          key={orgChart.templateId}
+          open
+          onOpenChange={(o) => {
+            if (!o) setOrgChart(null);
+          }}
+          dealId={dealId}
+          templateName={orgChart.templateName}
+          roles={orgChart.roles}
+          existing={orgChart.existing}
+          onDone={() => {
+            const id = orgChart.templateId;
+            setOrgChart(null);
+            startTransition(async () => {
+              await runAdopt(id);
+            });
+          }}
+        />
       )}
 
       {/* Item 7: packet removal — standard app modal instead of confirm(). */}

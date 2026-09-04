@@ -40,7 +40,14 @@ export type DiligenceAuditEventType =
   | "template_group_added"
   | "template_group_updated"
   | "template_group_deleted"
-  | "template_group_duplicated";
+  | "template_group_duplicated"
+  // The deal's org chart (ASK 2). Naming a party is what makes a template's
+  // repeating block produce real rows, so it changes what the checklist ASKS
+  // FOR — which is exactly the kind of change someone will later need to
+  // account for. One type for both directions: the summary says which, and
+  // splitting it would add a type whose only distinguishing use is a word the
+  // summary already carries.
+  | "org_chart_updated";
 
 export interface DiligenceAuditEvent {
   /** Null for org-level events (e.g. template imports in Settings). */
