@@ -170,6 +170,18 @@ export interface ImportColumnMapping {
   category: number | null;
   description: number | null;
   code: number | null;
+  /**
+   * TEMPLATE-OWNED STRUCTURE (ASK 6(e)). The financier's own section names,
+   * which are NOT the canonical 15 categories.
+   *
+   * This is the column that previously had nowhere to land. PNC's file has 12
+   * numbered top-level sections with subsections beneath them and 329 items, and
+   * none of its section names exist in the canonical list — so the importer
+   * could only map the item title and the Section column had to be left as
+   * reference-only. Mapping it here creates real groups on commit.
+   */
+  section: number | null;
+  subsection: number | null;
 }
 
 export async function commitChecklistImport(input: {
@@ -179,7 +191,13 @@ export async function commitChecklistImport(input: {
   rows: string[][];
   mapping: ImportColumnMapping;
   source: "import_excel" | "import_csv";
-}): Promise<{ templateId?: string; itemCount?: number; error?: string }> {
+}): Promise<{
+  templateId?: string;
+  itemCount?: number;
+  /** Template-owned sections created from the Section/Subsection columns. */
+  groupCount?: number;
+  error?: string;
+}> {
   await assertDiligenceCan("edit");
   const name = input.name.trim();
   if (!name) return { error: "Template name is required." };
@@ -205,6 +223,188 @@ export async function commitChecklistImport(input: {
   const templateId = (tmpl as { id: string }).id;
 
   const m = input.mapping;
+
+  // ---------------------------------------------------------------------------
+  // TEMPLATE-OWNED SECTIONS FROM THE SPREADSHEET (ASK 6(e))
+  // ---------------------------------------------------------------------------
+  // Groups are created in FIRST-APPEARANCE ORDER, which is the order the
+  // financier wrote them. Sorting alphabetically would silently reorder a
+  // lender's numbered checklist — PNC's sections run 1 to 12, and "10" sorts
+  // before "2", so the packet would stop matching the source document.
+  //
+  // LABELS ARE STORED VERBATIM AND NEVER PARSED. A cell reading "2. Real Estate"
+  // becomes the label "2. Real Estate", not code="2" plus label="Real Estate".
+  // Splitting it would be guessing at one lender's formatting, and the same
+  // principle already governs `code`: a financier's numbering is not arithmetic.
+  // The rename control in the drawer can split it afterwards if anyone wants it.
+  //
+  // Dedupe is case-insensitive on the trimmed cell, because a real spreadsheet
+  // contains "Real Estate" and "REAL ESTATE" in one column and they are one
+  // section. The FIRST spelling seen is the one stored.
+  const norm = (v: string) => v.trim().toLowerCase();
+  const cellAt = (r: string[], i: number | null) =>
+    i != null && i >= 0 ? (r[i] ?? "").trim() : "";
+  // Composite-key separator, written as an ESCAPE rather than the raw byte.
+  // I first wrote the literal character here. It compiled -- a NUL is a valid
+  // string character and makes an ideal separator -- but git then classified
+  // this file as BINARY and stopped producing line diffs for it. A source file
+  // whose diff nobody can review is a bad trade for one byte.
+  //
+  // NUL is still the right VALUE: these keys are built from spreadsheet labels,
+  // and any printable separator ("::", "|") could occur inside a real section
+  // name and collide two distinct groups into one.
+  const SEP = "\u0000";
+
+  interface SectionAcc {
+    label: string;
+    subKeys: string[];
+    subLabels: Map<string, string>;
+  }
+  const sections = new Map<string, SectionAcc>();
+  const sectionKeys: string[] = [];
+
+  if (m.section != null || m.subsection != null) {
+    for (const r of input.rows) {
+      if (!cellAt(r, m.title)) continue; // titleless rows are dropped below too
+      let secLabel = cellAt(r, m.section);
+      let subLabel = cellAt(r, m.subsection);
+      // A subsection with no section becomes a TOP-LEVEL section: the
+      // alternative is an orphan with no parent, and the migration's trigger
+      // derives depth FROM the parent, so a parentless child cannot exist.
+      if (!secLabel && subLabel) {
+        secLabel = subLabel;
+        subLabel = "";
+      }
+      if (!secLabel) continue; // genuinely ungrouped row
+      const sk = norm(secLabel);
+      let entry = sections.get(sk);
+      if (!entry) {
+        entry = { label: secLabel, subKeys: [], subLabels: new Map() };
+        sections.set(sk, entry);
+        sectionKeys.push(sk);
+      }
+      if (subLabel) {
+        const subk = norm(subLabel);
+        if (!entry.subLabels.has(subk)) {
+          entry.subLabels.set(subk, subLabel);
+          entry.subKeys.push(subk);
+        }
+      }
+    }
+  }
+
+  // Sections first, then their subsections: a subsection needs its parent's id,
+  // and the trigger derives depth from that parent.
+  const sectionIdByKey = new Map<string, string>();
+  const subIdByKey = new Map<string, string>();
+  if (sectionKeys.length > 0) {
+    const { data: secRows, error: secErr } = await supabase
+      .from("nurock_diligence_item_groups")
+      .insert(
+        sectionKeys.map((sk, i) => ({
+          template_id: templateId,
+          parent_group_id: null,
+          label: sections.get(sk)!.label,
+          sort_order: i,
+        }))
+      )
+      .select("id, label");
+    if (secErr) {
+      // Roll the template back rather than leave a half-imported packet — the
+      // same treatment the empty-items case already gets below.
+      await supabase
+        .from("nurock_diligence_templates")
+        .delete()
+        .eq("id", templateId);
+      return { error: describeDbError(secErr) };
+    }
+    // Match returned rows back by LABEL, not by array position: PostgREST does
+    // not promise the insert returns rows in the order they were sent.
+    const secIdByLabel = new Map(
+      ((secRows ?? []) as Array<{ id: string; label: string }>).map((x) => [
+        norm(x.label),
+        x.id,
+      ])
+    );
+    for (const sk of sectionKeys) {
+      const id = secIdByLabel.get(sk);
+      if (id) sectionIdByKey.set(sk, id);
+    }
+
+    const subPayload: Array<{
+      key: string;
+      row: {
+        template_id: string;
+        parent_group_id: string;
+        label: string;
+        sort_order: number;
+      };
+    }> = [];
+    for (const sk of sectionKeys) {
+      const entry = sections.get(sk)!;
+      const parentId = sectionIdByKey.get(sk);
+      if (!parentId) continue;
+      entry.subKeys.forEach((subk, i) => {
+        subPayload.push({
+          key: `${sk}${SEP}${subk}`,
+          row: {
+            template_id: templateId,
+            parent_group_id: parentId,
+            label: entry.subLabels.get(subk)!,
+            sort_order: i,
+          },
+        });
+      });
+    }
+
+    if (subPayload.length > 0) {
+      const { data: subRows, error: subErr } = await supabase
+        .from("nurock_diligence_item_groups")
+        .insert(subPayload.map((p) => p.row))
+        .select("id, label, parent_group_id");
+      if (subErr) {
+        await supabase
+          .from("nurock_diligence_templates")
+          .delete()
+          .eq("id", templateId);
+        return { error: describeDbError(subErr) };
+      }
+      // Keyed on (parent, label): two different sections may each legitimately
+      // contain a "Title" subsection, so the label alone is not unique.
+      const subIdByParentLabel = new Map(
+        ((subRows ?? []) as Array<{
+          id: string;
+          label: string;
+          parent_group_id: string;
+        }>).map((x) => [`${x.parent_group_id}${SEP}${norm(x.label)}`, x.id])
+      );
+      for (const p of subPayload) {
+        const id = subIdByParentLabel.get(
+          `${p.row.parent_group_id}${SEP}${norm(p.row.label)}`
+        );
+        if (id) subIdByKey.set(p.key, id);
+      }
+    }
+  }
+
+  /** The group a row belongs in: its subsection if it has one, else its section. */
+  const groupIdForRow = (r: string[]): string | null => {
+    if (m.section == null && m.subsection == null) return null;
+    let secLabel = cellAt(r, m.section);
+    let subLabel = cellAt(r, m.subsection);
+    if (!secLabel && subLabel) {
+      secLabel = subLabel;
+      subLabel = "";
+    }
+    if (!secLabel) return null;
+    const sk = norm(secLabel);
+    if (subLabel) {
+      const id = subIdByKey.get(`${sk}${SEP}${norm(subLabel)}`);
+      if (id) return id;
+    }
+    return sectionIdByKey.get(sk) ?? null;
+  };
+
   const items = input.rows
     .map((r, idx) => {
       const title = (r[m.title] ?? "").trim();
@@ -213,6 +413,10 @@ export async function commitChecklistImport(input: {
         template_id: templateId,
         item_number: idx + 1,
         title,
+        group_id: groupIdForRow(r),
+        // `category` STAYS the canonical LIHTC grouping and is NOT fed from the
+        // section column. They are different facts about one item, and merging
+        // them is precisely what ASK 6 exists to undo.
         category:
           m.category != null && r[m.category]?.trim()
             ? r[m.category].trim()
@@ -250,13 +454,19 @@ export async function commitChecklistImport(input: {
       dealId: null, // org-level event — no deal
       actorUserId: user?.id ?? null,
       eventType: "template_imported",
-      summary: `Imported checklist "${name}" (${items.length} items, ${input.source === "import_csv" ? "CSV" : "Excel"})`,
+      summary: `Imported checklist "${name}" (${items.length} items, ${
+        sectionIdByKey.size + subIdByKey.size
+      } sections, ${input.source === "import_csv" ? "CSV" : "Excel"})`,
       detail: { templateId, itemCount: items.length, source: input.source },
     });
   }
 
   revalidateTemplates();
-  return { templateId, itemCount: items.length };
+  return {
+    templateId,
+    itemCount: items.length,
+    groupCount: sectionIdByKey.size + subIdByKey.size,
+  };
 }
 
 // -----------------------------------------------------------------------------

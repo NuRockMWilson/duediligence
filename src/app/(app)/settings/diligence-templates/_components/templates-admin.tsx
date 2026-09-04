@@ -436,6 +436,10 @@ export function ImportDialog({
   const [categoryCol, setCategoryCol] = React.useState<string>(NONE);
   const [descCol, setDescCol] = React.useState<string>(NONE);
   const [codeCol, setCodeCol] = React.useState<string>(NONE);
+  // ASK 6(e): the financier's OWN structure. Separate from categoryCol, which
+  // stays the canonical LIHTC grouping.
+  const [sectionCol, setSectionCol] = React.useState<string>(NONE);
+  const [subsectionCol, setSubsectionCol] = React.useState<string>(NONE);
 
   function reset() {
     setFile(null);
@@ -446,6 +450,8 @@ export function ImportDialog({
     setCategoryCol(NONE);
     setDescCol(NONE);
     setCodeCol(NONE);
+    setSectionCol(NONE);
+    setSubsectionCol(NONE);
   }
 
   function close(o: boolean) {
@@ -483,6 +489,8 @@ export function ImportDialog({
       category: categoryCol === NONE ? null : Number(categoryCol),
       description: descCol === NONE ? null : Number(descCol),
       code: codeCol === NONE ? null : Number(codeCol),
+      section: sectionCol === NONE ? null : Number(sectionCol),
+      subsection: subsectionCol === NONE ? null : Number(subsectionCol),
     };
     start(async () => {
       const res = await commitChecklistImport({
@@ -499,7 +507,13 @@ export function ImportDialog({
         toast.error(res.error);
         return;
       }
-      toast.success(`Imported ${res.itemCount} items`);
+      toast.success(
+        res.groupCount
+          ? `Imported ${res.itemCount} items into ${res.groupCount} section${
+              res.groupCount === 1 ? "" : "s"
+            }.`
+          : `Imported ${res.itemCount} items.`
+      );
       close(false);
       router.refresh();
     });
@@ -603,9 +617,14 @@ export function ImportDialog({
                 Map columns
               </div>
               <ColMap label="Item title *" value={titleCol} onChange={setTitleCol} options={colOptions} allowNone={false} />
-              <ColMap label="Category / section" value={categoryCol} onChange={setCategoryCol} options={colOptions} />
+              <ColMap label="Category (NuRock standard)" value={categoryCol} onChange={setCategoryCol} options={colOptions} />
               <ColMap label="Description" value={descCol} onChange={setDescCol} options={colOptions} />
               <ColMap label="Code / reference" value={codeCol} onChange={setCodeCol} options={colOptions} />
+              {/* The financier's OWN structure. Mapping these creates real
+                  sections on commit, in first-appearance order, so a packet
+                  keeps the shape of the document it came from. */}
+              <ColMap label="Section (financier's own)" value={sectionCol} onChange={setSectionCol} options={colOptions} />
+              <ColMap label="Subsection (financier's own)" value={subsectionCol} onChange={setSubsectionCol} options={colOptions} />
             </div>
 
             {/* Item 9: visible duplicate-title warning in the preview. */}
@@ -757,20 +776,39 @@ function DetailDrawer({
     router.refresh();
   }
 
+  // EVERY CROSSWALK WRITE NOW CONFIRMS ITSELF. All three of these were silent
+  // on success until 2026-09-04, and that silence directly caused a false
+  // report: the live session mapped an item, saw no toast, and recorded "no
+  // chip created" — when the write had in fact succeeded. Retire and restore
+  // toasted correctly, so the inconsistency read as failure. A write that says
+  // nothing is indistinguishable from a write that did not happen.
   async function addMap(externalItemId: string, canonicalItemId: string) {
     const res = await addCrosswalkMapping({ canonicalItemId, externalItemId });
     if (res.error) toast.error(res.error);
-    else afterMutation();
+    else {
+      toast.success("Mapped to the standard item.");
+      afterMutation();
+    }
   }
   async function removeMap(externalItemId: string, canonicalItemId: string) {
     const res = await removeCrosswalkMapping({ canonicalItemId, externalItemId });
     if (res.error) toast.error(res.error);
-    else afterMutation();
+    else {
+      toast.success("Mapping removed.");
+      afterMutation();
+    }
   }
   async function changeMode(externalItemId: string, mode: "all" | "any") {
     const res = await setCrosswalkMode({ externalItemId, mode });
     if (res.error) toast.error(res.error);
-    else afterMutation();
+    else {
+      toast.success(
+        mode === "any"
+          ? "Now satisfied by ANY mapped item."
+          : "Now requires ALL mapped items."
+      );
+      afterMutation();
+    }
   }
 
   const isCanonical = detail?.template.isCanonical ?? false;
