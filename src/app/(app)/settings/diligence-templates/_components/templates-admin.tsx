@@ -16,6 +16,7 @@ import {
   ClipboardList,
   Plus,
   Upload,
+  ListTree,
   Trash2,
   Sparkles,
   X,
@@ -62,6 +63,7 @@ import {
   DILIGENCE_CATEGORIES,
 } from "@/lib/diligence/categories";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { OutlineImportDialog } from "./outline-import-dialog";
 import type {
   TemplateSummary,
   CanonicalItemLite,
@@ -133,6 +135,7 @@ export function TemplatesAdmin({
   const router = useRouter();
   const [createOpen, setCreateOpen] = React.useState(false);
   const [importOpen, setImportOpen] = React.useState(false);
+  const [outlineOpen, setOutlineOpen] = React.useState(false);
   const [detailId, setDetailId] = React.useState<string | null>(null);
   // Item 7: retire confirms via the app's standard modal, not confirm().
   const [templateToRetire, setTemplateToRetire] =
@@ -202,13 +205,28 @@ export function TemplatesAdmin({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* TWO IMPORT BUTTONS, not one with a mode switch inside.
+              The two flows ask genuinely different questions — "which column is
+              the title" versus "are these five blocks the same thing" — and the
+              choice depends on the file, which the user is looking at before
+              they click. A mode toggle inside the dialog would mean uploading
+              first and discovering the wrong mode second. */}
           <Button
             variant="outline"
             size="sm"
             className="h-8"
             onClick={() => setImportOpen(true)}
           >
-            <Upload className="w-3.5 h-3.5 mr-1.5" /> Import checklist
+            <Upload className="w-3.5 h-3.5 mr-1.5" /> Import columns
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8"
+            onClick={() => setOutlineOpen(true)}
+            title="For indented checklists with no Section column"
+          >
+            <ListTree className="w-3.5 h-3.5 mr-1.5" /> Import outline
           </Button>
           <Button
             size="sm"
@@ -295,6 +313,7 @@ export function TemplatesAdmin({
 
       <CreateDialog open={createOpen} onOpenChange={setCreateOpen} />
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
+      <OutlineImportDialog open={outlineOpen} onOpenChange={setOutlineOpen} />
       <DetailDrawer
         templateId={detailId}
         canonicalItems={canonicalItems}

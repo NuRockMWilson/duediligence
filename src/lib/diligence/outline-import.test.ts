@@ -250,6 +250,37 @@ describe("parseOutline — structure", () => {
     expect(nodes + items + parsed.preambleRows).toBe(rowsWithContent);
   });
 
+  it("gives every node a unique path even when codes repeat", () => {
+    // THE REASON PATHS EXIST. PNC has a block coded "i" under 11a and a
+    // different block coded "i" under 11c. A UI decision keyed on the code
+    // alone — "collapse these into one repeating block" — would be ambiguous
+    // and could hit the wrong tier.
+    const dup = parseOutline([
+      ["", "11. Transaction Financing"],
+      ["", "a. Commitment Letters"],
+      ["", "", "i. Bridge (PNC)"],
+      ["", "", "ii. Construction (PNC)"],
+      ["", "c. Loan Documents"],
+      ["", "", "i. Bridge (PNC)"],
+      ["", "", "ii. Construction (PNC)"],
+    ]);
+    const paths: string[] = [];
+    const codes: string[] = [];
+    const walk = (ns: typeof dup.sections) => {
+      for (const n of ns) {
+        paths.push(n.path);
+        if (n.code) codes.push(n.code);
+        walk(n.children);
+      }
+    };
+    walk(dup.sections);
+
+    // The codes DO collide — that is the hazard, asserted rather than assumed.
+    expect(codes.filter((c) => c === "i")).toHaveLength(2);
+    // The paths do not.
+    expect(new Set(paths).size).toBe(paths.length);
+  });
+
   it("does read the mid-sheet column-label row as an item — a known limitation", () => {
     // ASSERTING THE FLAW RATHER THAN PRETENDING IT IS ABSENT. PNC's header row
     // sits inside section 1 and looks exactly like a document row, so it lands

@@ -73,6 +73,16 @@ export interface OutlineNode {
   /** The lender's own numbering, verbatim: "2", "b3.1", "iii". */
   code: string | null;
   label: string;
+  /**
+   * Stable identity for this node within the parse: "11", "11/c", "11/c/i".
+   *
+   * A CODE IS NOT AN IDENTIFIER. PNC has a block coded "i" under 11a AND a
+   * different block coded "i" under 11c, so any UI decision keyed on the code
+   * alone — "collapse these members into one block" — would be ambiguous and
+   * could apply to the wrong tier. Built from the parse position rather than the
+   * label, since two siblings may share a label.
+   */
+  path: string;
   items: OutlineItem[];
   children: OutlineNode[];
 }
@@ -141,7 +151,16 @@ export function parseOutline(
     // first "N." heading is the lender's cover block — title, committee date,
     // project description — and is not checklist content.
     if (h && (m = h.match(TOP))) {
-      section = { level: 0, code: m[1], label: m[2].trim(), items: [], children: [] };
+      section = {
+        level: 0,
+        code: m[1],
+        label: m[2].trim(),
+        // Ordinal, not the code: a lender may repeat or skip numbers, and the
+        // path has to stay unique regardless of what the sheet says.
+        path: `s${sections.length}`,
+        items: [],
+        children: [],
+      };
       sections.push(section);
       sub = null;
       third = null;
@@ -154,7 +173,14 @@ export function parseOutline(
     }
 
     if (h && !BARE_NUMBER.test(h) && (m = h.match(SUB))) {
-      sub = { level: 1, code: m[1], label: m[2].trim(), items: [], children: [] };
+      sub = {
+        level: 1,
+        code: m[1],
+        label: m[2].trim(),
+        path: `${section.path}/${section.children.length}`,
+        items: [],
+        children: [],
+      };
       section.children.push(sub);
       nSub++;
       third = null;
@@ -162,8 +188,16 @@ export function parseOutline(
     }
 
     if (it && (m = it.match(ROMAN))) {
-      third = { level: 2, code: m[1], label: m[2].trim(), items: [], children: [] };
-      (sub ?? section).children.push(third);
+      const parent = sub ?? section;
+      third = {
+        level: 2,
+        code: m[1],
+        label: m[2].trim(),
+        path: `${parent.path}/${parent.children.length}`,
+        items: [],
+        children: [],
+      };
+      parent.children.push(third);
       nThird++;
       continue;
     }
@@ -202,8 +236,10 @@ export function parseOutline(
 // -----------------------------------------------------------------------------
 
 export interface DetectedFamily {
+  /** Stable id for this family, derived from its first member's path. */
+  id: string;
   /** The sibling headings that share an identical item list. */
-  members: Array<{ code: string | null; label: string }>;
+  members: Array<{ path: string; code: string | null; label: string }>;
   /** Their shared item titles, in order. */
   itemTitles: string[];
   /** Suggested role key, or null when nothing in the labels indicates one. */
@@ -294,7 +330,12 @@ export function detectFamilies(
       const labels = group.map((g) => g.label);
       const { role, label } = suggestRole(labels);
       families.push({
-        members: group.map((g) => ({ code: g.code, label: g.label })),
+        id: `fam:${group[0].path}`,
+        members: group.map((g) => ({
+          path: g.path,
+          code: g.code,
+          label: g.label,
+        })),
         itemTitles: group[0].items.map((i) => i.title),
         suggestedRole: role,
         suggestedLabel: label,
@@ -359,9 +400,12 @@ export function totalEntriesSaved(families: DetectedFamily[]): number {
 const NAMES_A_DOCUMENT = /\b(certificat(?:e|ion)|form\s*\d|questionnaire|report|opinion|agreement)\b/i;
 
 export interface CandidateFamily {
+  id: string;
   /** The parent heading these empty blocks sit under, for context. */
   parentLabel: string;
+  parentPath: string;
   members: Array<{
+    path: string;
     code: string | null;
     label: string;
     /** Pre-ticked when the label matches the role hint. Always overridable. */
@@ -393,8 +437,11 @@ export function detectCandidateFamilies(
       const { role, label } = suggestRole(labels);
       const hint = ROLE_HINTS.find((h) => h.role === role);
       out.push({
+        id: `cand:${parent.path}`,
         parentLabel: parent.label,
+        parentPath: parent.path,
         members: empties.map((e) => ({
+          path: e.path,
           code: e.code,
           label: e.label,
           // No hint matched the group at all -> tick everything, since the whole
