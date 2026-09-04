@@ -48,8 +48,27 @@ BEGIN
   -- Fixtures. A throwaway deal so nothing real is touched, plus two entities.
   -- ==========================================================================
   v_deal := 'zz_verify_entities_' || substr(md5(random()::text), 1, 8);
-  INSERT INTO deals (id, name, stage)
-    VALUES (v_deal, 'ZZ VERIFY ENTITIES', 'underwriting');
+  -- owner_id is NOT NULL on deals, which the first version of this script did
+  -- not supply -- it failed with 23502 before running a single check. Three
+  -- fallbacks, because the value differs by who is running this: auth.uid() is
+  -- NULL in the SQL editor (Michael runs as a superuser, not through PostgREST),
+  -- so it falls back to an existing owner and finally to a literal.
+  --
+  -- A THROWAWAY DEAL, not an existing one, and that is deliberate rather than
+  -- tidy. Check 5a inserts a DUPLICATE (deal_id, item_id) and expects a refusal.
+  -- On a real deal that already tracks the chosen item, the first insert would
+  -- collide instead of the second -- so 5a would PASS FOR THE WRONG REASON and
+  -- prove nothing about the partial index. A fresh deal tracks nothing, so the
+  -- first insert must succeed and only the second may fail.
+  INSERT INTO deals (id, name, stage, owner_id)
+    VALUES (
+      v_deal, 'ZZ VERIFY ENTITIES', 'underwriting',
+      coalesce(
+        auth.uid()::text,
+        (SELECT d.owner_id FROM deals d WHERE d.owner_id IS NOT NULL LIMIT 1),
+        'zz-verify-entities'
+      )
+    );
 
   -- Any existing catalog item will do as the thing being tracked.
   SELECT id INTO v_item FROM nurock_diligence_items WHERE is_active LIMIT 1;
