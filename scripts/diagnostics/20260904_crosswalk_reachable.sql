@@ -94,13 +94,17 @@ SELECT * FROM (
    WHERE table_schema = 'public' AND table_name = 'nurock_diligence_crosswalk'
      AND grantee = 'authenticated'
 
-  UNION ALL
-  SELECT 7, 'if it exists: row count',
-         CASE WHEN to_regclass('public.nurock_diligence_crosswalk') IS NULL
-              THEN 'n/a — absent' ELSE 'see detail' END,
-         CASE WHEN to_regclass('public.nurock_diligence_crosswalk') IS NULL
-              THEN 'absent'
-              ELSE (SELECT count(*)::text FROM public.nurock_diligence_crosswalk) END
+  -- NO ROW COUNT HERE, DELIBERATELY. The first version of this script ended with
+  -- `ELSE (SELECT count(*) FROM public.nurock_diligence_crosswalk)` behind a
+  -- to_regclass guard, and it FAILED with 42P01 on the very question it was
+  -- asked: a table reference is resolved when the statement is PARSED, so no
+  -- runtime CASE can protect it. I had written that exact warning earlier in the
+  -- session and then did it anyway.
+  --
+  -- It answered the question by failing — the error names cause (a) — but a
+  -- diagnostic that only works when the answer is "fine" is no diagnostic. Every
+  -- check above reads the CATALOG only, which is why they all still ran.
+  -- Count the rows separately once the table exists.
 
 ) checks ORDER BY seq;
 
@@ -121,7 +125,8 @@ SELECT * FROM (
 --                       with no grant, which is the shape that broke the items
 --                       DELETE on 2026-09-03).
 --
--- Row 7 > 0 with the app reporting no mappings would mean rows exist and are
--- being filtered by RLS — a different problem again, and one row 5 and 6 would
--- narrow.
+-- ONCE THE TABLE EXISTS, count its rows separately:
+--   SELECT count(*) FROM public.nurock_diligence_crosswalk;
+-- A non-zero count while the app still reports no mappings would mean rows exist
+-- and are being FILTERED — a different problem again, which rows 5 and 6 narrow.
 -- ============================================================================
