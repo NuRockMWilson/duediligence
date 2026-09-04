@@ -14,6 +14,7 @@ import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/server";
 import { logDiligenceEvent } from "@/lib/diligence/audit";
 import { assertDiligenceCan } from "@/lib/auth/access";
+import { describeDbError } from "@/lib/diligence/db-errors";
 import {
   getTemplateDetail,
   type TemplateKind,
@@ -74,7 +75,7 @@ export async function createDiligenceTemplate(input: {
     })
     .select("id")
     .single();
-  if (error) return { error: error.message };
+  if (error) return { error: describeDbError(error) };
 
   revalidateTemplates();
   return { id: (data as { id: string }).id };
@@ -102,7 +103,7 @@ export async function setDiligenceTemplateActive(input: {
     .update({ is_active: input.active, updated_at: new Date().toISOString() })
     .eq("id", input.templateId)
     .select("id");
-  if (error) return { error: error.message };
+  if (error) return { error: describeDbError(error) };
   if (!updated || (updated as unknown[]).length === 0) {
     return {
       error:
@@ -276,7 +277,7 @@ export async function addCrosswalkMapping(input: {
     },
     { onConflict: "canonical_item_id,external_item_id", ignoreDuplicates: true }
   );
-  if (error) return { error: error.message };
+  if (error) return { error: describeDbError(error) };
   revalidateTemplates();
   return {};
 }
@@ -292,7 +293,7 @@ export async function removeCrosswalkMapping(input: {
     .delete()
     .eq("canonical_item_id", input.canonicalItemId)
     .eq("external_item_id", input.externalItemId);
-  if (error) return { error: error.message };
+  if (error) return { error: describeDbError(error) };
   revalidateTemplates();
   return {};
 }
@@ -308,7 +309,7 @@ export async function setCrosswalkMode(input: {
     .from("nurock_diligence_crosswalk")
     .update({ requirement_mode: input.mode, updated_at: new Date().toISOString() })
     .eq("external_item_id", input.externalItemId);
-  if (error) return { error: error.message };
+  if (error) return { error: describeDbError(error) };
   revalidateTemplates();
   return {};
 }
@@ -334,7 +335,7 @@ export async function adoptTemplateForDeal(input: {
     },
     { onConflict: "deal_id,template_id", ignoreDuplicates: true }
   );
-  if (error) return { error: error.message };
+  if (error) return { error: describeDbError(error) };
 
   await logDiligenceEvent(sb, {
     dealId: input.dealId,

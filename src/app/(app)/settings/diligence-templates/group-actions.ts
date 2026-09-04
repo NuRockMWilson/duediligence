@@ -34,6 +34,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { logDiligenceEvent } from "@/lib/diligence/audit";
 import { assertDiligenceCan } from "@/lib/auth/access";
+import { describeDbError } from "@/lib/diligence/db-errors";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnySb = any;
@@ -43,28 +44,21 @@ function revalidateTemplates() {
 }
 
 /**
- * Turn a database refusal into something a person can act on.
+ * Group-specific refusals, then the shared translation for everything else.
  *
  * The trigger messages are already written for a reader ("Checklist groups nest
- * at most three levels…"), so those pass through. Only the CHECK-constraint
- * names, which are not, get translated.
+ * at most three levels…") so those pass straight through describeDbError. Only
+ * the CHECK-constraint NAMES, which are not readable, are translated here.
  */
 function groupErrorMessage(error: { message?: string; code?: string }): string {
-  const raw = error.message ?? "Unknown database error.";
+  const raw = error.message ?? "";
   if (/nurock_diligence_item_groups_entity_role_chk/i.test(raw)) {
     return "A repeating section needs an entity type, and a non-repeating one must not have it.";
   }
   if (/nurock_diligence_item_groups_label_check|btrim\(label\)/i.test(raw)) {
     return "Give the section a name.";
   }
-  if (/permission denied for table/i.test(raw)) {
-    return (
-      "The database refused this change — the app is missing a privilege on the " +
-      "checklist catalog. Nothing was changed. Please report this; it needs a " +
-      "grant, not a retry."
-    );
-  }
-  return raw;
+  return describeDbError(error);
 }
 
 // -----------------------------------------------------------------------------

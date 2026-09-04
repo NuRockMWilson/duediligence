@@ -348,13 +348,32 @@ export async function getDiligenceFinancierCoverage(
   const externalItemIds = externalItems.map((i) => i.id);
 
   // Crosswalk rows touching these external items.
-  const { data: xwalk } =
+  const { data: xwalk, error: xwalkErr } =
     externalItemIds.length > 0
       ? await sb
           .from("nurock_diligence_crosswalk")
           .select("canonical_item_id, external_item_id, requirement_mode")
           .in("external_item_id", externalItemIds)
-      : { data: [] };
+      : { data: [], error: null };
+  // AN UNREADABLE CROSSWALK IS NOT AN EMPTY CROSSWALK, and here it changes a
+  // NUMBER THE CFO READS. With no rows every external item classifies as
+  // "unmapped", so `satisfied` is 0 and the packet reports 0% covered no matter
+  // what has actually been collected. Measured 2026-09-04: the table is
+  // unreachable, and this read swallowed the error.
+  //
+  // It has been invisible because the only adopted packet system-wide has ZERO
+  // items, so coveragePct was null for a reason that never exercised this path.
+  // The first packet with items would have reported 0% and looked like a data
+  // problem rather than a missing table.
+  if (xwalkErr) {
+    console.error(
+      "[diligence] crosswalk unreadable in getDiligenceFinancierCoverage — every " +
+        "packet item will classify as UNMAPPED and coverage will read 0%. Apply " +
+        "supabase/migrations/0082_diligence_crosswalk.sql and " +
+        "NOTIFY pgrst, 'reload schema'.",
+      xwalkErr
+    );
+  }
 
   type Xwalk = {
     canonical_item_id: string;

@@ -306,10 +306,25 @@ export async function getTemplateDetail(
   const externalItemIds = itemRows.map((i) => i.id);
   let crosswalk: CrosswalkLink[] = [];
   if (externalItemIds.length > 0) {
-    const { data: xw } = await supabase
+    const { data: xw, error: xwErr } = await supabase
       .from("nurock_diligence_crosswalk")
       .select("canonical_item_id, external_item_id, requirement_mode")
       .in("external_item_id", externalItemIds);
+    // AN UNREADABLE CROSSWALK IS NOT AN EMPTY CROSSWALK. This destructured only
+    // `data` until 2026-09-04, so "Could not find the table
+    // 'public.nurock_diligence_crosswalk' in the schema cache" rendered as a
+    // drawer with no mapped chips — which is exactly what a genuinely unmapped
+    // template looks like. Three rounds of live investigation concluded "there
+    // are simply no mappings" because nothing distinguished the two.
+    if (xwErr) {
+      console.error(
+        "[diligence] crosswalk unreadable in getTemplateDetail — the drawer will " +
+          "show NO mappings, which is not the same as having none. Apply " +
+          "supabase/migrations/0082_diligence_crosswalk.sql and " +
+          "NOTIFY pgrst, 'reload schema'.",
+        xwErr
+      );
+    }
     crosswalk = ((xw ?? []) as Array<{
       canonical_item_id: string;
       external_item_id: string;

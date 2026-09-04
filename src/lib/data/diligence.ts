@@ -163,18 +163,55 @@ export async function ensureDealDiligenceItems(
   // coverage flows through the canonical items they map to). Running here
   // (every diligence page load) makes packet adoption self-healing the same
   // way the canonical checklist is.
-  const [{ data: adopted }, { data: mappedRows }] = await Promise.all([
-    supabase
-      .from("dm_diligence_deal_templates")
-      .select("template_id")
-      .eq("deal_id", dealId),
-    supabase.from("nurock_diligence_crosswalk").select("external_item_id"),
-  ]);
+  const [{ data: adopted }, { data: mappedRows, error: mappedErr }] =
+    await Promise.all([
+      supabase
+        .from("dm_diligence_deal_templates")
+        .select("template_id")
+        .eq("deal_id", dealId),
+      supabase.from("nurock_diligence_crosswalk").select("external_item_id"),
+    ]);
   const adoptedExternal = ((adopted ?? []) as Array<{ template_id: string }>)
     .map((r) => r.template_id)
     .filter((id) => id !== templateId);
   let standalone: Array<{ id: string; default_required: boolean }> = [];
   if (adoptedExternal.length > 0) {
+    // =======================================================================
+    // AN UNREADABLE CROSSWALK MUST NOT LOOK LIKE AN EMPTY ONE. THIS IS A WRITE.
+    // =======================================================================
+    // MEASURED 2026-09-04: the live session tried to create a mapping and got
+    // "Could not find the table 'public.nurock_diligence_crosswalk' in the
+    // schema cache". Every read of that table in this codebase — here,
+    // getTemplateDetail, and getDiligenceFinancierCoverage — destructured only
+    // `data` and ignored `error`, so an UNREACHABLE table was indistinguishable
+    // from a table with no rows. That is why three rounds of investigation kept
+    // concluding "there are simply no mappings".
+    //
+    // Here it is worse than a wrong display, because mappedSet decides WHICH
+    // PACKET ITEMS GET INSTANTIATED. Empty means "nothing is mapped", so every
+    // item of every adopted packet becomes STANDALONE and is written as a
+    // deal-item row — for PNC's 329-item checklist, 329 rows that should mostly
+    // have stayed virtual. A read failure would have silently changed a deal's
+    // tracked scope.
+    //
+    // So this returns 0 and instantiates NOTHING for packets when the crosswalk
+    // cannot be read. The canonical items above are unaffected — they do not
+    // depend on the crosswalk — so a deal still gets its standard checklist.
+    // Deciding packet scope from a failed read is the one thing that must not
+    // happen.
+    // `standalone` is left EMPTY rather than returning early: the canonical
+    // items below must still be instantiated, because they do not depend on the
+    // crosswalk at all. A deal keeps its standard checklist; only packet scope
+    // is withheld, which is the part that cannot be decided from a failed read.
+    if (mappedErr) {
+      console.error(
+        "[diligence] crosswalk unreadable — instantiating NO packet items rather " +
+          "than treating every packet item as unmapped. The canonical checklist " +
+          "is unaffected. Apply supabase/migrations/0082_diligence_crosswalk.sql " +
+          "and NOTIFY pgrst, 'reload schema'.",
+        mappedErr
+      );
+    } else {
     const mappedSet = new Set(
       ((mappedRows ?? []) as Array<{ external_item_id: string }>).map(
         (r) => r.external_item_id
@@ -189,6 +226,7 @@ export async function ensureDealDiligenceItems(
       id: string;
       default_required: boolean;
     }>).filter((i) => !mappedSet.has(i.id) && !have.has(i.id));
+    }
   }
 
   const toInsert = [...missing, ...standalone];

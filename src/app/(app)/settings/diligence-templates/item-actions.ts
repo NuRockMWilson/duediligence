@@ -48,41 +48,15 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { logDiligenceEvent } from "@/lib/diligence/audit";
 import { assertDiligenceCan } from "@/lib/auth/access";
+// ONE translation of database faults, shared with group-actions and the
+// crosswalk. Three local copies of this logic is how they drift.
+import { describeDbError as writeErrorMessage } from "@/lib/diligence/db-errors";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnySb = any;
 
 function revalidateTemplates() {
   revalidatePath("/settings/diligence-templates");
-}
-
-/**
- * Turn a Postgres write failure into a sentence a person can act on.
- *
- * MEASURED 2026-09-03: a failed delete surfaced to the user as the toast
- * "permission denied for table nurock_diligence_items" — a raw driver string
- * that names an internal table and reads as a crash rather than a refusal. The
- * live session flagged it as a second defect alongside the failure itself, and
- * it is the same problem the export work already solved: a refusal has to arrive
- * as a sentence, or a guard firing and a bug look identical from the outside.
- *
- * The raw message is still returned for anything unrecognised — inventing
- * friendly copy for an unknown fault would hide information the next
- * investigation needs. Only the two shapes with a known cause are translated.
- */
-function writeErrorMessage(error: { message?: string; code?: string }): string {
-  const raw = error.message ?? "Unknown database error.";
-  if (/permission denied for table/i.test(raw)) {
-    return (
-      "The database refused this change — the app is missing a privilege on the " +
-      "checklist catalog. Nothing was changed. Please report this; it needs a " +
-      "grant, not a retry."
-    );
-  }
-  if (error.code === "23505" || /duplicate key|unique constraint/i.test(raw)) {
-    return "That position is already taken — reload the checklist and try again.";
-  }
-  return raw;
 }
 
 /** Rows of dm_diligence_deal_items pointing at this catalog item. */
