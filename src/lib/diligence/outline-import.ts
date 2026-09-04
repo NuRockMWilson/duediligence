@@ -276,7 +276,14 @@ export function detectFamilies(
       // in the sheet proves it, and inventing a shared item list for them would
       // be fabricating content.
       if (n.items.length === 0) continue;
-      const sig = n.items.map((i) => i.title).join(" ");
+      // NUL as the separator, written as an ESCAPE and never as a literal byte.
+      // A document title cannot contain NUL, so two different item lists can
+      // never produce the same signature — whereas joining on a space would let
+      // ["a b", "c"] and ["a", "b c"] collide and fuse two unrelated blocks into
+      // one family. The escape matters as much as the choice: a literal NUL
+      // compiles fine but makes git classify the whole file as binary, which is
+      // precisely how this line was first committed.
+      const sig = n.items.map((i) => i.title).join("\u0000");
       const arr = bySignature.get(sig) ?? [];
       arr.push(n);
       bySignature.set(sig, arr);
