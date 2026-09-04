@@ -45,10 +45,12 @@ SELECT * FROM (
     FROM pg_constraint con
     JOIN pg_class rel ON rel.oid = con.conrelid
    WHERE rel.relname = 'dm_diligence_deal_items' AND con.contype = 'u'
-     AND (SELECT array_agg(att.attname ORDER BY att.attname)
+     -- ::text on BOTH sides: attname is `name`, and name[] = text[] has no
+     -- operator. See the note in the migration.
+     AND (SELECT array_agg(att.attname::text ORDER BY att.attname::text)
             FROM unnest(con.conkey) k
             JOIN pg_attribute att ON att.attrelid=con.conrelid AND att.attnum=k)
-         = ARRAY['deal_id','item_id']
+         = ARRAY['deal_id','item_id']::text[]
 
   UNION ALL
   SELECT 6, 'both PARTIAL unique indexes exist',

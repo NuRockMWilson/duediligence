@@ -225,11 +225,16 @@ BEGIN
     JOIN pg_class rel ON rel.oid = con.conrelid
    WHERE rel.relname = 'dm_diligence_deal_items'
      AND con.contype = 'u'
-     AND (SELECT array_agg(att.attname ORDER BY att.attname)
+     -- ::text ON BOTH SIDES. pg_attribute.attname is type `name`, so
+     -- array_agg yields name[] and there is NO name[] = text[] operator --
+     -- "operator does not exist: name[] = text[]", which is how the first
+     -- version of this migration aborted. pglast cannot see it: it is a type
+     -- resolution failure, not a syntax error.
+     AND (SELECT array_agg(att.attname::text ORDER BY att.attname::text)
             FROM unnest(con.conkey) k
             JOIN pg_attribute att
               ON att.attrelid = con.conrelid AND att.attnum = k)
-         = ARRAY['deal_id','item_id']
+         = ARRAY['deal_id','item_id']::text[]
    LIMIT 1;
   IF c IS NOT NULL THEN
     EXECUTE format(
