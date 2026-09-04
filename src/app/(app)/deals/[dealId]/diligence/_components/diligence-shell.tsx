@@ -27,6 +27,7 @@ import {
   AlertTriangle,
   Bell,
   Paperclip,
+  Building2,
   X,
   FileDown,
   Clock,
@@ -104,6 +105,12 @@ import {
 
 const ALL = "__all__";
 const UNASSIGNED = "__unassigned__";
+// R2.2 filter sentinels. Distinct values rather than reusing UNASSIGNED,
+// because "no packet" and "nobody responsible" are different questions and a
+// shared sentinel would make one filter silently answer the other.
+const CANONICAL_ONLY = "__canonical__";
+const RESPONSIBLE_NOBODY = "__resp_nobody__";
+const RESPONSIBLE_ANY_FINANCIER = "__resp_financier__";
 const BULK_PLACEHOLDER = "__bulk__";
 
 const RING_TONE: Record<string, "green" | "amber" | "red" | "navy"> = {
@@ -152,6 +159,11 @@ export function DiligenceShell({
   const [statusFilter, setStatusFilter] = React.useState<string>(ALL);
   const [categoryFilter, setCategoryFilter] = React.useState<string>(ALL);
   const [assigneeFilter, setAssigneeFilter] = React.useState<string>(ALL);
+  // R2.2: narrowing to one packet, and to who OWES an item. Both default to ALL
+  // so the combined checklist is what loads — these narrow it, they never
+  // replace it with a per-packet mode.
+  const [packetFilter, setPacketFilter] = React.useState<string>(ALL);
+  const [responsibleFilter, setResponsibleFilter] = React.useState<string>(ALL);
   const [overdueOnly, setOverdueOnly] = React.useState(false);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [drawerItem, setDrawerItem] = React.useState<DiligenceItem | null>(null);
@@ -212,6 +224,23 @@ export function DiligenceShell({
     if (!next) setDrawerOpen(false);
   }, [items]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Packets actually present on THIS deal's checklist, derived from the items
+  // rather than from availableTemplates: a template can be adopted and still
+  // have contributed no items, and offering a filter that can only ever return
+  // nothing is worse than not offering it.
+  const packetOptions = React.useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const i of items) {
+      if (i.templateId && !seen.has(i.templateId)) {
+        seen.set(i.templateId, i.templateName ?? i.financierName ?? "Packet");
+      }
+    }
+    return Array.from(seen.entries()).map(([value, label]) => ({
+      value,
+      label,
+    }));
+  }, [items]);
+
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase();
     return items.filter((i) => {
@@ -225,6 +254,27 @@ export function DiligenceShell({
         i.assigneeUserId !== assigneeFilter
       )
         return false;
+      if (packetFilter === CANONICAL_ONLY && i.templateId !== null) return false;
+      if (
+        packetFilter !== ALL &&
+        packetFilter !== CANONICAL_ONLY &&
+        i.templateId !== packetFilter
+      )
+        return false;
+      // Responsible party is a THREE-state field (a user, the financier, or
+      // undecided), so the filter needs its own sentinels rather than reusing
+      // the assignee ones — "nobody decided" is a real answer people will want
+      // to chase, not the absence of a filter.
+      if (responsibleFilter === RESPONSIBLE_NOBODY) {
+        if (i.responsibleUserId || i.responsibleIsFinancier) return false;
+      } else if (responsibleFilter === RESPONSIBLE_ANY_FINANCIER) {
+        if (!i.responsibleIsFinancier) return false;
+      } else if (
+        responsibleFilter !== ALL &&
+        i.responsibleUserId !== responsibleFilter
+      ) {
+        return false;
+      }
       if (overdueOnly) {
         const overdue =
           i.dueDate != null &&
@@ -235,20 +285,38 @@ export function DiligenceShell({
       }
       return true;
     });
-  }, [items, query, statusFilter, categoryFilter, assigneeFilter, overdueOnly, todayIso]);
+  }, [
+    items,
+    query,
+    statusFilter,
+    categoryFilter,
+    assigneeFilter,
+    packetFilter,
+    responsibleFilter,
+    overdueOnly,
+    todayIso,
+  ]);
 
-  // Group filtered items by category (seed order), with a per-category status
-  // roll-up so a COLLAPSED section still reads at a glance (done/total + a
-  // slim bar, plus overdue / in-review counts).
+  // ---------------------------------------------------------------------------
+  // GROUPING — canonical categories by default, THE PACKET'S OWN SECTIONS when
+  // filtered to one packet (R2.2)
+  // ---------------------------------------------------------------------------
+  // Michael's instruction was explicit: a per-packet view as A FILTER OVER A
+  // COMBINED DEFAULT, never a segmented switcher. So the checklist still opens
+  // showing everything grouped by the canonical LIHTC categories, and narrowing
+  // to one packet re-groups it under that lender's OWN section names.
+  //
+  // That re-grouping is the point rather than a flourish. Filtered to PNC, the
+  // list should read like the document PNC actually sent — "1. Entity
+  // Information", "2. Real Estate" — because the person working it has that
+  // file open beside the screen. Showing PNC's items under NuRock's canonical
+  // categories would force them to translate between two structures on every
+  // row, which is exactly what the groups work exists to stop.
+  //
+  // Falls back to categories when the packet has no sections of its own, so a
+  // flat imported checklist does not collapse into one nameless heap.
   const groups = React.useMemo(() => {
-    const byCat = new Map<string, DiligenceItem[]>();
-    for (const i of filtered) {
-      const arr = byCat.get(i.category) ?? [];
-      arr.push(i);
-      byCat.set(i.category, arr);
-    }
-    return DILIGENCE_CATEGORIES.filter((c) => byCat.has(c.key)).map((c) => {
-      const arr = byCat.get(c.key)!;
+    const rollUp = (key: string, label: string, blurb: string | undefined, arr: DiligenceItem[]) => {
       const approved = arr.filter((i) => i.status === "approved").length;
       const waived = arr.filter((i) => WAIVE_STATES.includes(i.status)).length;
       const submitted = arr.filter((i) => i.status === "submitted").length;
@@ -260,19 +328,63 @@ export function DiligenceShell({
           !WAIVE_STATES.includes(i.status)
       ).length;
       return {
-        key: c.key,
-        label: c.label,
-        blurb: c.blurb,
+        key,
+        label,
+        blurb,
         items: arr,
         total: arr.length,
         // "Done" = terminal-satisfied (approved OR waived/na) — nothing left
-        // to chase in this category.
+        // to chase in this section.
         done: approved + waived,
         submitted,
         overdue,
       };
-    });
-  }, [filtered, todayIso]);
+    };
+
+    const packetHasSections =
+      packetFilter !== ALL && filtered.some((i) => i.groupId !== null);
+
+    if (packetHasSections) {
+      // FIRST-APPEARANCE ORDER, not alphabetical. The read layer already sorts
+      // items by the lender's own numbering, and "10" sorts before "2" — so an
+      // alphabetical pass would silently reorder a numbered checklist away from
+      // the source document.
+      const byGroup = new Map<string, DiligenceItem[]>();
+      const order: string[] = [];
+      for (const i of filtered) {
+        const key = i.groupId ?? "__ungrouped__";
+        if (!byGroup.has(key)) {
+          byGroup.set(key, []);
+          order.push(key);
+        }
+        byGroup.get(key)!.push(i);
+      }
+      return order.map((key) => {
+        const arr = byGroup.get(key)!;
+        const first = arr[0];
+        const label =
+          key === "__ungrouped__"
+            ? "Ungrouped"
+            : // Parent prefix so a subsection reads unambiguously: two sections
+              // may each hold a "Title" subsection, and "Real Estate › Title"
+              // says which one without needing a nested table.
+              [first.groupParentLabel, first.groupLabel]
+                .filter(Boolean)
+                .join(" › ") || "Ungrouped";
+        return rollUp(key, label, undefined, arr);
+      });
+    }
+
+    const byCat = new Map<string, DiligenceItem[]>();
+    for (const i of filtered) {
+      const arr = byCat.get(i.category) ?? [];
+      arr.push(i);
+      byCat.set(i.category, arr);
+    }
+    return DILIGENCE_CATEGORIES.filter((c) => byCat.has(c.key)).map((c) =>
+      rollUp(c.key, c.label, c.blurb, byCat.get(c.key)!)
+    );
+  }, [filtered, todayIso, packetFilter]);
 
   // Collapsible category sections. Seed COLLAPSED with the fully-satisfied
   // categories (every item approved/waived/na) so a fresh load isn't a wall of
@@ -306,6 +418,8 @@ export function DiligenceShell({
     statusFilter !== ALL ||
     categoryFilter !== ALL ||
     assigneeFilter !== ALL ||
+    packetFilter !== ALL ||
+    responsibleFilter !== ALL ||
     overdueOnly;
 
   function toggleCategory(key: string) {
@@ -412,10 +526,18 @@ export function DiligenceShell({
           : null;
         return [
           categoryLabel(i.category),
+          // The packet and its own section, so an exported row can be matched
+          // back to the lender's document. Both blank for canonical items.
+          i.templateName ?? "",
+          [i.groupParentLabel, i.groupLabel].filter(Boolean).join(" > "),
           i.itemNumber ?? "",
           i.title,
           STATUS_META[i.status].label,
           i.isRequired ? "Required" : "Optional",
+          // Responsible party flattens to a name either way — a spreadsheet
+          // cannot carry the icon, and "PNC Bank" in a Responsible column is
+          // unambiguous on its own.
+          i.responsibleName ?? "",
           i.assigneeName ?? "",
           i.dueDate ?? "",
           i.completedDate ?? "",
@@ -427,7 +549,9 @@ export function DiligenceShell({
     );
     import("@/lib/export/download").then(({ downloadCsv }) => {
       downloadCsv(
-        ["Category", "Item #", "Item", "Status", "Required", "Assignee", "Due", "Met", "On Time / Late", "Docs", "Notes"],
+        // KEEP IN STEP WITH THE ROW ARRAY ABOVE. A header and a row built in
+        // two places is how a CSV silently shifts every column by one.
+        ["Category", "Packet", "Section", "Item #", "Item", "Status", "Required", "Responsible", "Assignee", "Due", "Met", "On Time / Late", "Docs", "Notes"],
         rows,
         `${dealName.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-due-diligence-${todayIso}.csv`
       );
@@ -1078,6 +1202,32 @@ export function DiligenceShell({
             ...team.map((t) => ({ value: t.userId, label: t.name })),
           ]}
         />
+        {/* R2.2: the per-packet view, as a FILTER over the combined default.
+            Narrowing to one packet also re-groups the table under that
+            lender's own section names — see the grouping memo above. Only
+            rendered when the deal actually has a packet beyond the canonical
+            checklist; a one-option filter is furniture, not a control. */}
+        {packetOptions.length > 0 && (
+          <FilterSelect
+            value={packetFilter}
+            onChange={setPacketFilter}
+            placeholder="All packets"
+            options={[
+              { value: CANONICAL_ONLY, label: "NuRock standard only" },
+              ...packetOptions,
+            ]}
+          />
+        )}
+        <FilterSelect
+          value={responsibleFilter}
+          onChange={setResponsibleFilter}
+          placeholder="Anyone responsible"
+          options={[
+            { value: RESPONSIBLE_NOBODY, label: "Nobody decided yet" },
+            { value: RESPONSIBLE_ANY_FINANCIER, label: "The financier" },
+            ...team.map((t) => ({ value: t.userId, label: t.name })),
+          ]}
+        />
         <button
           onClick={() => setOverdueOnly((v) => !v)}
           className={`inline-flex items-center gap-1.5 h-9 px-3 rounded text-[12px] border transition ${
@@ -1181,12 +1331,19 @@ export function DiligenceShell({
                 </th>
                 <th className="px-2 py-2 font-display font-medium">Item</th>
                 <th className="px-3 py-2 font-display font-medium">Status</th>
+                {/* R2.2 columns. Responsible sits beside Assignee because the
+                    pairing is the point — who owes it, and who is chasing
+                    it. */}
+                <th className="px-3 py-2 font-display font-medium">
+                  Responsible
+                </th>
                 <th className="px-3 py-2 font-display font-medium">Assignee</th>
                 <th className="px-3 py-2 font-display font-medium">Due</th>
                 <th className="px-3 py-2 font-display font-medium">Met</th>
                 <th className="px-3 py-2 font-display font-medium text-center">
                   Docs
                 </th>
+                <th className="px-3 py-2 font-display font-medium">Notes</th>
               </tr>
             </thead>
             <tbody>
@@ -1196,7 +1353,11 @@ export function DiligenceShell({
                 return (
                 <React.Fragment key={g.key}>
                   <tr className="bg-nurock-gray/40 border-y border-nurock-border">
-                    <td colSpan={7} className="p-0">
+                    {/* 9 = checkbox, Item, Status, Responsible, Assignee, Due,
+                        Met, Docs, Notes. Kept in step with the <thead> above —
+                        a stale colSpan silently shortens the section header bar
+                        and the mismatch is easy to miss on a wide table. */}
+                    <td colSpan={9} className="p-0">
                       {/* Collapsible category header — the whole bar toggles the
                           section; the right-side roll-up keeps a collapsed
                           category informative (done/total + bar, plus overdue /
@@ -1297,6 +1458,28 @@ export function DiligenceShell({
                             {STATUS_META[i.status].label}
                           </Badge>
                         </td>
+                        {/* RESPONSIBLE PARTY. The financier renders in the
+                            packet's own words and is visually distinct from a
+                            NuRock name, because "PNC owes this" and "Robby owes
+                            this" lead to completely different next actions and
+                            a reader scanning 80 rows should not have to
+                            remember which names are colleagues. */}
+                        <td className="px-3 py-2">
+                          {i.responsibleIsFinancier ? (
+                            <span className="inline-flex items-center gap-1 text-nurock-tan-dark">
+                              <Building2 className="w-3 h-3 shrink-0" />
+                              {i.responsibleName ?? "The financier"}
+                            </span>
+                          ) : i.responsibleName ? (
+                            <span className="text-nurock-slate">
+                              {i.responsibleName}
+                            </span>
+                          ) : (
+                            <span className="text-nurock-slate-light italic">
+                              Not decided
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-nurock-slate">
                           {i.assigneeName ?? (
                             <span className="text-nurock-slate-light italic">
@@ -1339,6 +1522,23 @@ export function DiligenceShell({
                             <span className="inline-flex items-center gap-1 text-nurock-slate">
                               <Paperclip className="w-3 h-3" />
                               {i.docs.length}
+                            </span>
+                          ) : (
+                            <span className="text-nurock-slate-light">—</span>
+                          )}
+                        </td>
+                        {/* NOTES. Truncated with the full text on hover rather
+                            than wrapped: a note can run to a paragraph, and one
+                            long note must not set the row height for the
+                            seventy rows around it. The drawer is where notes
+                            are read and written in full. */}
+                        <td className="px-3 py-2 max-w-[220px]">
+                          {i.notes ? (
+                            <span
+                              className="block truncate text-nurock-slate"
+                              title={i.notes}
+                            >
+                              {i.notes}
                             </span>
                           ) : (
                             <span className="text-nurock-slate-light">—</span>

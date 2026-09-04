@@ -92,6 +92,20 @@ export interface DiligenceItem {
   templateId: string | null;
   templateName: string | null;
   financierName: string | null;
+  /**
+   * The packet's OWN section for this item (ASK 6 groups), e.g. "Entity
+   * Information" / "Marlin Housing Partners, LP - Partnership".
+   *
+   * NOT the canonical category. A financier's structure and the canonical
+   * LIHTC grouping are different facts about one item, which is the whole
+   * point of the groups work — the checklist groups by category by default and
+   * by THIS when filtered to a single packet, so the list matches the document
+   * the lender actually sent.
+   */
+  groupId: string | null;
+  groupLabel: string | null;
+  /** The parent section's label when the group is a subsection. */
+  groupParentLabel: string | null;
   approvedAt: string | null;
   waivedReason: string | null;
   docs: DiligenceDoc[];
@@ -403,7 +417,7 @@ export async function getDiligenceChecklist(
       .select(
         `id, item_id, status, is_required, assignee_user_id, due_date, notes,
          approved_at, waived_reason,
-         nurock_diligence_items ( item_number, category, title, description, template_id )`
+         nurock_diligence_items ( item_number, category, title, description, template_id, group_id )`
       )
       .eq("deal_id", dealId),
     sb
@@ -575,6 +589,33 @@ export async function getDiligenceChecklist(
     }
   }
 
+  // Template-owned sections (migration 20260903) — best-effort like the rest.
+  // Read for every template rather than per item: a checklist can span several
+  // packets, and one query beats one per template.
+  const groupMeta = new Map<
+    string,
+    { label: string; parentId: string | null; sortOrder: number }
+  >();
+  {
+    const { data: grpRows, error: grpErr } = await sb
+      .from("nurock_diligence_item_groups")
+      .select("id, label, parent_group_id, sort_order");
+    if (!grpErr) {
+      for (const r of (grpRows ?? []) as Array<{
+        id: string;
+        label: string;
+        parent_group_id: string | null;
+        sort_order: number;
+      }>) {
+        groupMeta.set(r.id, {
+          label: r.label,
+          parentId: r.parent_group_id,
+          sortOrder: r.sort_order,
+        });
+      }
+    }
+  }
+
   // Expected-document slots (migration 0100) — best-effort like above, so a
   // deploy ahead of the migration degrades to "no slots" (>=1-doc gate).
   const expectedByItem = new Map<string, ExpectedDoc[]>();
@@ -637,6 +678,7 @@ export async function getDiligenceChecklist(
       title: string;
       description: string | null;
       template_id: string | null;
+      group_id: string | null;
     } | null;
   };
 
@@ -679,6 +721,18 @@ export async function getDiligenceChecklist(
             templateId: tid,
             templateName: tmpl?.name ?? null,
             financierName: tmpl?.financierName ?? null,
+            ...(() => {
+              const gid = meta?.group_id ?? null;
+              const g = gid ? groupMeta.get(gid) : undefined;
+              const parent = g?.parentId
+                ? groupMeta.get(g.parentId)
+                : undefined;
+              return {
+                groupId: gid,
+                groupLabel: g?.label ?? null,
+                groupParentLabel: parent?.label ?? null,
+              };
+            })(),
           };
         })(),
         approvedAt: r.approved_at,
