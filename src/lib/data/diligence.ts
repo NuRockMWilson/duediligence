@@ -63,6 +63,35 @@ export interface DiligenceItem {
    *  Read tolerantly so pre-migration deploys still work. */
   completedDate: string | null;
   notes: string | null;
+  // ---------------------------------------------------------------------------
+  // RESPONSIBLE PARTY — who OWES the item, which is not who is working it
+  // ---------------------------------------------------------------------------
+  // Michael's definition: "the entity which generated the list (i.e. PNC Bank)
+  // or the NuRock organizational users that have IDs". The table enforces that
+  // as an either/or (CHECK: never both), so these two fields are one decision
+  // in three states — a named user, the financier, or nobody has decided.
+  //
+  // ADDED BECAUSE THE COLUMNS WERE UNREACHABLE. The 20260904 migration created
+  // them and the reminder digest already filters on them — "'mine' = items I am
+  // the assignee OR the responsible party for" — but NO application code ever
+  // wrote either one. That half of every digest query matched zero rows
+  // permanently, so once Resend is live someone responsible for forty items
+  // would be told they have none. Same shape as the vacuous 100% badge: a
+  // correct report over data that cannot exist.
+  responsibleUserId: string | null;
+  responsibleIsFinancier: boolean;
+  /** Resolved for display: the user's name, or the packet's financier. */
+  responsibleName: string | null;
+  /**
+   * The packet this item came from, and its financier.
+   *
+   * Needed twice over: to name the financier when THEY are the responsible
+   * party, and to group the checklist per packet (R2.2). Null for canonical
+   * NuRock items, which belong to no financier.
+   */
+  templateId: string | null;
+  templateName: string | null;
+  financierName: string | null;
   approvedAt: string | null;
   waivedReason: string | null;
   docs: DiligenceDoc[];
@@ -374,7 +403,7 @@ export async function getDiligenceChecklist(
       .select(
         `id, item_id, status, is_required, assignee_user_id, due_date, notes,
          approved_at, waived_reason,
-         nurock_diligence_items ( item_number, category, title, description )`
+         nurock_diligence_items ( item_number, category, title, description, template_id )`
       )
       .eq("deal_id", dealId),
     sb
@@ -488,6 +517,64 @@ export async function getDiligenceChecklist(
     }
   }
 
+  // Responsible party (migration 20260904) — best-effort like the two above.
+  //
+  // A SEPARATE QUERY RATHER THAN TWO MORE COLUMNS ON THE MAIN SELECT, even
+  // though the migration is confirmed applied. The risk is asymmetric: folding
+  // them in makes a missing column break the ENTIRE checklist, while a
+  // tolerant read degrades to "nobody is marked responsible" — visibly wrong,
+  // trivially recoverable, and it matches the pattern the two blocks above
+  // already establish for recently-added columns.
+  const responsibleByItem = new Map<
+    string,
+    { userId: string | null; isFinancier: boolean }
+  >();
+  {
+    const { data: respRows, error: respErr } = await sb
+      .from("dm_diligence_deal_items")
+      .select("id, responsible_user_id, responsible_is_financier")
+      .eq("deal_id", dealId);
+    if (!respErr) {
+      for (const r of (respRows ?? []) as Array<{
+        id: string;
+        responsible_user_id: string | null;
+        responsible_is_financier: boolean | null;
+      }>) {
+        if (r.responsible_user_id || r.responsible_is_financier) {
+          responsibleByItem.set(r.id, {
+            userId: r.responsible_user_id,
+            isFinancier: Boolean(r.responsible_is_financier),
+          });
+        }
+      }
+    }
+  }
+
+  // Which packet each item belongs to. Read from the templates table rather
+  // than assumed, because an item's financier is what names it when the
+  // FINANCIER is the responsible party — and R2.2 groups the checklist by it.
+  const templateMeta = new Map<
+    string,
+    { name: string; financierName: string | null }
+  >();
+  {
+    const { data: tmplRows, error: tmplErr } = await sb
+      .from("nurock_diligence_templates")
+      .select("id, name, financier_name");
+    if (!tmplErr) {
+      for (const r of (tmplRows ?? []) as Array<{
+        id: string;
+        name: string;
+        financier_name: string | null;
+      }>) {
+        templateMeta.set(r.id, {
+          name: r.name,
+          financierName: r.financier_name,
+        });
+      }
+    }
+  }
+
   // Expected-document slots (migration 0100) — best-effort like above, so a
   // deploy ahead of the migration degrades to "no slots" (>=1-doc gate).
   const expectedByItem = new Map<string, ExpectedDoc[]>();
@@ -549,6 +636,7 @@ export async function getDiligenceChecklist(
       category: string;
       title: string;
       description: string | null;
+      template_id: string | null;
     } | null;
   };
 
@@ -571,6 +659,28 @@ export async function getDiligenceChecklist(
         dueDate: r.due_date,
         completedDate: completedByItem.get(r.id) ?? null,
         notes: r.notes,
+        ...(() => {
+          const tid = meta?.template_id ?? null;
+          const tmpl = tid ? templateMeta.get(tid) : undefined;
+          const resp = responsibleByItem.get(r.id);
+          return {
+            responsibleUserId: resp?.userId ?? null,
+            responsibleIsFinancier: resp?.isFinancier ?? false,
+            // Resolved here so every surface shows the same name without each
+            // one re-deriving it. A financier with no name on the template
+            // falls back to a generic label rather than rendering blank — the
+            // fact that SOMEONE outside NuRock owes the item is the useful
+            // half, and it survives a template with an empty financier field.
+            responsibleName: resp
+              ? resp.isFinancier
+                ? (tmpl?.financierName ?? "The financier")
+                : (resp.userId ? nameByUser.get(resp.userId) ?? null : null)
+              : null,
+            templateId: tid,
+            templateName: tmpl?.name ?? null,
+            financierName: tmpl?.financierName ?? null,
+          };
+        })(),
         approvedAt: r.approved_at,
         waivedReason: r.waived_reason,
         docs: docsByItem.get(r.id) ?? [],

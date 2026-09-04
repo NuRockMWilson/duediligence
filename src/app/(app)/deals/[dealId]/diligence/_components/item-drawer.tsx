@@ -43,6 +43,8 @@ import { MetPill } from "./met-pill";
 import {
   getDiligenceDocSignedUrl,
   setDiligenceAssignee,
+  setDiligenceResponsibleParty,
+  type ResponsibleParty,
   setDiligenceDueDate,
   setDiligenceCompletedDate,
   setDiligenceNotes,
@@ -60,6 +62,10 @@ import {
 } from "../actions";
 
 const UNASSIGNED = "__unassigned__";
+// Sentinels, not empty strings: Radix Select treats "" as "no value" and would
+// render the placeholder instead of the chosen option.
+const RESPONSIBLE_NONE = "__resp_none__";
+const RESPONSIBLE_FINANCIER = "__resp_financier__";
 const UNFILLED_SLOT = "__unfilled__";
 
 const SIGNOFF_ROLES: { role: SignoffRole; label: string }[] = [
@@ -186,6 +192,28 @@ export function ItemDrawer({
           itemLabel: item!.title,
         }),
       assigneeUserId ? "Assigned" : "Unassigned"
+    );
+  }
+
+  function onResponsible(value: string) {
+    const responsible: ResponsibleParty =
+      value === RESPONSIBLE_NONE
+        ? { kind: "none" }
+        : value === RESPONSIBLE_FINANCIER
+          ? { kind: "financier" }
+          : { kind: "user", userId: value };
+    run(
+      () =>
+        setDiligenceResponsibleParty({
+          dealId,
+          dealItemIds: [item!.id],
+          responsible,
+        }),
+      responsible.kind === "none"
+        ? "Responsible party cleared"
+        : responsible.kind === "financier"
+          ? `${item!.financierName ?? "The financier"} is responsible`
+          : "Responsible party set"
     );
   }
 
@@ -332,6 +360,58 @@ export function ItemDrawer({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          {/* -----------------------------------------------------------------
+              RESPONSIBLE PARTY — who OWES the item, not who is chasing it
+              -----------------------------------------------------------------
+              Michael's definition: "either the entity which generated the list
+              (i.e. PNC Bank) or the NuRock organizational users that have IDs".
+              One dropdown, not two controls, because the table enforces those
+              as an either/or — a row can never be both.
+
+              Deliberately BELOW assignee and visually distinct, because the two
+              are easy to conflate and mean different things: PNC owes their own
+              commitment letter while a NuRock analyst is still the one working
+              the item. The reminder digest queries both, which is only
+              meaningful while they stay separate.
+
+              The financier option appears only for items that CAME FROM a
+              financier's packet. A canonical NuRock item has no financier, and
+              offering "the financier" there would be offering a party that does
+              not exist for that row. */}
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Responsible party</Label>
+            <Select
+              value={
+                item.responsibleIsFinancier
+                  ? RESPONSIBLE_FINANCIER
+                  : (item.responsibleUserId ?? RESPONSIBLE_NONE)
+              }
+              onValueChange={onResponsible}
+              disabled={!canEdit || pending}
+            >
+              <SelectTrigger className="h-9 text-sm">
+                <SelectValue placeholder="Not decided" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={RESPONSIBLE_NONE}>Not decided</SelectItem>
+                {item.financierName && (
+                  <SelectItem value={RESPONSIBLE_FINANCIER}>
+                    {item.financierName} (the financier)
+                  </SelectItem>
+                )}
+                {team.map((t) => (
+                  <SelectItem key={t.userId} value={t.userId}>
+                    {t.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-nurock-slate-light">
+              Who owes this document — not who is chasing it. People named here
+              are included in the reminder emails they have turned on.
+            </p>
           </div>
 
           {/* Due date */}

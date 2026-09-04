@@ -65,6 +65,7 @@ import {
   type PacketDoc,
 } from "@/lib/diligence/packet";
 import { logDiligenceEvent } from "@/lib/diligence/audit";
+import { describeDbError } from "@/lib/diligence/db-errors";
 import type { DiligenceStatus } from "@/lib/data/diligence-rollup";
 
 export type SignoffRole = "preparer" | "reviewer" | "approver";
@@ -274,6 +275,84 @@ export async function setDiligenceNotes(input: {
     .eq("id", input.dealItemId)
     .eq("deal_id", input.dealId);
   if (error) return { error: error.message };
+  revalidate(input.dealId);
+  return {};
+}
+
+// =============================================================================
+// Responsible party — who OWES the item
+// =============================================================================
+// THIS ACTION IS THE MISSING LINK IN A CHAIN THAT WAS ALREADY BUILT AT BOTH
+// ENDS. The 20260904 migration added responsible_user_id and
+// responsible_is_financier, and app_diligence_due_digests already filters on
+// them — "'mine' = items I am the assignee OR the responsible party for". But
+// nothing in the application ever wrote either column, so that half of every
+// digest query matched zero rows permanently. Once Resend is provisioned,
+// someone made responsible for forty items would have been emailed that they
+// have none.
+//
+// Michael's definition, verbatim: responsible party is "either the entity which
+// generated the list (i.e. PNC Bank) or the NuRock organizational users that
+// have IDs". The table enforces that as an either/or —
+//   CHECK (NOT (responsible_is_financier AND responsible_user_id IS NOT NULL))
+// — so this takes ONE discriminated choice rather than two independent fields.
+// Accepting both and letting the database reject the contradiction would turn a
+// UI mistake into an opaque 23514.
+//
+// RESPONSIBLE IS NOT ASSIGNEE, deliberately kept separate. Who owes a document
+// and who is chasing it are different questions: PNC owes their own commitment
+// letter, and a NuRock analyst is still the one working the item. Collapsing
+// them would have made the digest's two-sided query meaningless.
+// =============================================================================
+
+export type ResponsibleParty =
+  | { kind: "user"; userId: string }
+  | { kind: "financier" }
+  | { kind: "none" };
+
+export async function setDiligenceResponsibleParty(input: {
+  dealId: string;
+  /** Bulk-capable: the list view sets several rows at once. */
+  dealItemIds: string[];
+  responsible: ResponsibleParty;
+}): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
+  if (input.dealItemIds.length === 0) return {};
+
+  const r = input.responsible;
+  if (r.kind === "user" && !r.userId) {
+    return { error: "Pick a person, or choose the financier." };
+  }
+
+  const patch =
+    r.kind === "user"
+      ? { responsible_user_id: r.userId, responsible_is_financier: false }
+      : r.kind === "financier"
+        ? { responsible_user_id: null, responsible_is_financier: true }
+        : { responsible_user_id: null, responsible_is_financier: false };
+
+  const supabase = await createClient();
+  const sb = supabase as AnySb;
+  const { data, error } = await sb
+    .from("dm_diligence_deal_items")
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .in("id", input.dealItemIds)
+    // deal_id as well as id: the ids arrive from the client, and scoping the
+    // update to this deal means a forged id from another deal updates nothing
+    // rather than something.
+    .eq("deal_id", input.dealId)
+    .select("id");
+  if (error) return { error: describeDbError(error) };
+  // A zero-row update is the silent-no-op shape RLS produces. Without this the
+  // UI would toast success while the digest kept matching nobody — the exact
+  // failure this action exists to end.
+  if (!data || (data as unknown[]).length === 0) {
+    return {
+      error:
+        "The change didn't persist — no row was updated. Check row-level security on dm_diligence_deal_items.",
+    };
+  }
+
   revalidate(input.dealId);
   return {};
 }
