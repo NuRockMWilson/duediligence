@@ -47,6 +47,7 @@ import {
   detectFamilies,
   detectCandidateFamilies,
   totalEntriesSaved,
+  planCollapse,
   type ParsedOutline,
   type OutlineNode,
   type DetectedFamily,
@@ -513,6 +514,35 @@ export async function commitOutlineImport(input: CommitOutlineInput): Promise<{
   if (items.length === 0) {
     return rollback(
       "No items were found in the outline — only headings. Nothing was imported."
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // THE PROMISE AND THE WRITE MUST AGREE, OR NOTHING IS WRITTEN
+  // ---------------------------------------------------------------------------
+  // Live round 54: the review footer said "Will import 320 items with 8
+  // duplicate blocks combined" and this action wrote 242. 242 was correct; the
+  // sentence promised the raw parse count AND the combining at once. The cause
+  // was two independent counts with nothing comparing them.
+  //
+  // planCollapse() is now the single source, used by the footer above and
+  // checked here against the rows actually built. If they ever diverge again
+  // the import FAILS rather than quietly writing a different number than the
+  // reviewer approved — a refusal is recoverable, a silent 78-item shortfall in
+  // a lender's diligence list is not.
+  const plan = planCollapse(input.parsed, input.collapses);
+  if (plan.itemsToWrite !== items.length) {
+    return rollback(
+      `Refusing to import: the review screen promised ${plan.itemsToWrite} items ` +
+        `but this build produced ${items.length}. Nothing was written. Re-run the ` +
+        `preview — if it happens again, the preview and the importer disagree and ` +
+        `that is a bug worth reporting.`
+    );
+  }
+  if (plan.groupsToWrite !== groupIdByPath.size) {
+    return rollback(
+      `Refusing to import: expected ${plan.groupsToWrite} sections but wrote ` +
+        `${groupIdByPath.size}. Nothing was written.`
     );
   }
 

@@ -91,6 +91,20 @@ export interface ParsedOutline {
   sections: OutlineNode[];
   /** Rows before the first heading — title block, dates, project description. */
   preambleRows: number;
+  /**
+   * Rows AFTER the first section that carried text in the heading column, did
+   * not match any heading convention, and had nothing in the item column — so
+   * nothing was done with them.
+   *
+   * SURFACED BECAUSE IT IS SILENT LOSS. Found while writing a test fixture: a
+   * row whose text sat one column left of where it belonged was discarded with
+   * no trace, and only an accounting check noticed. The parser genuinely cannot
+   * know what such a row means — it is not a heading and not in the item
+   * column — so guessing would be worse than reporting. The preview shows the
+   * count so a reviewer can go look at the sheet, rather than trusting a total
+   * that quietly excludes them.
+   */
+  unparsedRows: number;
   counts: { sections: number; subsections: number; thirdLevel: number; items: number };
 }
 
@@ -141,6 +155,7 @@ export function parseOutline(
   let nSub = 0;
   let nThird = 0;
   let nItems = 0;
+  let nUnparsed = 0;
 
   for (const row of rows) {
     const h = cell(row, hc);
@@ -216,12 +231,18 @@ export function parseOutline(
         notes: cell(row, nc) || null,
       });
       nItems++;
+      continue;
     }
+
+    // Text in the heading column that is not a heading, with nothing in the
+    // item column. Counted rather than ignored — see unparsedRows.
+    if (h) nUnparsed++;
   }
 
   return {
     sections,
     preambleRows,
+    unparsedRows: nUnparsed,
     counts: {
       sections: sections.length,
       subsections: nSub,
@@ -355,6 +376,94 @@ export function detectFamilies(
 /** Total item entries avoided by collapsing every detected family. */
 export function totalEntriesSaved(families: DetectedFamily[]): number {
   return families.reduce((s, f) => s + f.entriesSaved, 0);
+}
+
+// -----------------------------------------------------------------------------
+// What a set of collapse decisions will actually write
+// -----------------------------------------------------------------------------
+// ONE FUNCTION, USED BY BOTH THE PROMISE AND THE WRITE.
+//
+// This exists because of a real defect found in live round 54. The review
+// screen's footer read "Will import 320 items with 8 duplicate blocks combined"
+// and the import then wrote 242. Both numbers were correct about something —
+// 320 is the raw parse, 242 is the parse minus the 78 items on the absorbed
+// blocks — but the sentence asserted both at once, so the last screen before
+// commit promised a reviewer 78 items they were not going to get.
+//
+// The cause was not the wording. It was that the footer counted the tree while
+// the server counted what it was inserting, in two separate pieces of code, and
+// nothing compared them. Rewording the footer would have fixed this instance
+// and left the next one free to happen the moment either side changed.
+//
+// So the count is derived HERE, once, and:
+//   * the review footer prints what this returns
+//   * commitOutlineImport checks the rows it built against what this returns,
+//     and refuses the whole import if they disagree
+//
+// The promise and the write can no longer drift without the import failing
+// loudly, which is the only version of this that stays true.
+// -----------------------------------------------------------------------------
+
+/** The minimum a caller has to supply — deliberately not the action's type. */
+export interface CollapseLike {
+  memberPaths: string[];
+}
+
+export interface CollapsePlan {
+  /** Blocks absorbed into a survivor. These are not written at all. */
+  droppedPaths: Set<string>;
+  /** Headings that will exist after collapsing. */
+  groupsToWrite: number;
+  /** Items that will exist after collapsing — the number to promise. */
+  itemsToWrite: number;
+  /** Items NOT written because their block was absorbed. */
+  itemsDropped: number;
+  /** Absorbed blocks, i.e. "N duplicate blocks combined". */
+  blocksCombined: number;
+}
+
+export function planCollapse(
+  parsed: ParsedOutline,
+  collapses: CollapseLike[]
+): CollapsePlan {
+  const droppedPaths = new Set<string>();
+  for (const c of collapses) {
+    // The FIRST member survives and carries the block's items; the rest are the
+    // same list and are absorbed. Order matters, so it is the caller's job to
+    // pass them in sheet order rather than click order.
+    for (const p of c.memberPaths.slice(1)) droppedPaths.add(p);
+  }
+
+  let groupsToWrite = 0;
+  let itemsToWrite = 0;
+  let itemsDropped = 0;
+
+  const walk = (nodes: OutlineNode[], insideDropped: boolean) => {
+    for (const n of nodes) {
+      const gone = insideDropped || droppedPaths.has(n.path);
+      if (gone) {
+        itemsDropped += n.items.length;
+      } else {
+        groupsToWrite++;
+        itemsToWrite += n.items.length;
+      }
+      // A dropped block's children are dropped with it. Nothing in PNC's file
+      // nests under an absorbed member, but a lender file could, and counting
+      // such a child as written while the server refuses to place it (its
+      // parent has no id) is exactly the kind of disagreement this function
+      // exists to prevent.
+      walk(n.children, gone);
+    }
+  };
+  walk(parsed.sections, false);
+
+  return {
+    droppedPaths,
+    groupsToWrite,
+    itemsToWrite,
+    itemsDropped,
+    blocksCombined: droppedPaths.size,
+  };
 }
 
 // -----------------------------------------------------------------------------

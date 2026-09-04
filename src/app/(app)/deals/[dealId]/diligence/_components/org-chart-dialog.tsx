@@ -204,8 +204,8 @@ export function OrgChartDialog({
                       lender's document rather than taken on trust. */}
                   <div className="text-[11px] text-nurock-slate-light mt-0.5">
                     {role.blockCount} section
-                    {role.blockCount === 1 ? "" : "s"} repeat per {role.label}:{" "}
-                    {role.blockLabels.slice(0, 3).join(", ")}
+                    {role.blockCount === 1 ? " repeats" : "s repeat"} per{" "}
+                    {role.label}: {role.blockLabels.slice(0, 3).join(", ")}
                     {role.blockLabels.length > 3
                       ? ` +${role.blockLabels.length - 3} more`
                       : ""}

@@ -4,6 +4,7 @@ import {
   detectFamilies,
   detectCandidateFamilies,
   totalEntriesSaved,
+  planCollapse,
   type ParsedOutline,
 } from "./outline-import";
 
@@ -281,6 +282,36 @@ describe("parseOutline — structure", () => {
     expect(new Set(paths).size).toBe(paths.length);
   });
 
+  it("counts rows it could not place instead of dropping them silently", () => {
+    // The fixture itself is clean, so the honest expectation is zero.
+    expect(parsed.unparsedRows).toBe(0);
+
+    // A row whose text sits one column left of where it belongs matches no
+    // heading convention and has nothing in the item column. The parser cannot
+    // know what it means, so it counts it — reporting beats guessing, and beats
+    // a total that quietly excludes it.
+    const strayed = parseOutline([
+      ["", "1. Section"],
+      ["", "A note the lender typed in the heading column"],
+      ["", "a. Subsection"],
+      ["", "", "A real item"],
+    ]);
+    expect(strayed.unparsedRows).toBe(1);
+    expect(strayed.counts.items).toBe(1);
+
+    // SCOPE IS DELIBERATELY NARROW: the HEADING column only. Text in a column
+    // that was never mapped is not loss, it is a mapping choice the reviewer
+    // makes — and counting every non-empty cell outside the two mapped columns
+    // would fire on Resp. Party, Status and Notes in every real file, which is
+    // noise rather than a warning.
+    const otherColumn = parseOutline([
+      ["", "1. Section"],
+      ["something in column A"],
+      ["", "", "A real item"],
+    ]);
+    expect(otherColumn.unparsedRows).toBe(0);
+  });
+
   it("does read the mid-sheet column-label row as an item — a known limitation", () => {
     // ASSERTING THE FLAW RATHER THAN PRETENDING IT IS ABSENT. PNC's header row
     // sits inside section 1 and looks exactly like a document row, so it lands
@@ -353,6 +384,100 @@ describe("detectFamilies", () => {
     ]);
     expect(detectFamilies(lonely)).toEqual([]);
     expect(totalEntriesSaved([])).toBe(0);
+  });
+});
+
+describe("planCollapse — the number promised is the number written", () => {
+  // THE REGRESSION FROM LIVE ROUND 54. The review footer read "Will import 320
+  // items with 8 duplicate blocks combined" and the import wrote 242. Both
+  // numbers were true of something; the sentence asserted both at once.
+  //
+  // The real file's arithmetic, measured: 320 raw items, three families whose
+  // absorbed blocks carry 4x7 + 2x13 + 2x12 = 78 items, so 242 written and 8
+  // blocks combined. These tests pin that relationship on the fixture, where it
+  // is 2x2 + 2x2 = 8 dropped from 22, leaving 14.
+  const families = detectFamilies(parsed);
+  const collapses = families.map((f) => ({
+    memberPaths: f.members.map((m) => m.path),
+  }));
+
+  it("drops every member but the first", () => {
+    const plan = planCollapse(parsed, collapses);
+    // 3 GP + 3 guarantors = 6 members in 2 families, 2 survive.
+    expect(plan.blocksCombined).toBe(4);
+    expect(plan.droppedPaths.size).toBe(4);
+  });
+
+  it("counts written items as the raw count minus the absorbed ones", () => {
+    const plan = planCollapse(parsed, collapses);
+    expect(plan.itemsDropped).toBe(totalEntriesSaved(families));
+    expect(plan.itemsToWrite).toBe(
+      parsed.counts.items - totalEntriesSaved(families)
+    );
+    // Both halves derived, and they must add back up. This is the identity the
+    // footer violated: promising `counts.items` AND the combining together.
+    expect(plan.itemsToWrite + plan.itemsDropped).toBe(parsed.counts.items);
+  });
+
+  it("promises the raw count only when nothing is collapsed", () => {
+    const plan = planCollapse(parsed, []);
+    expect(plan.itemsToWrite).toBe(parsed.counts.items);
+    expect(plan.itemsDropped).toBe(0);
+    expect(plan.blocksCombined).toBe(0);
+  });
+
+  it("keeps the survivor's own items", () => {
+    const gp = families.find((f) => f.suggestedRole === "general_partner")!;
+    const plan = planCollapse(parsed, [
+      { memberPaths: gp.members.map((m) => m.path) },
+    ]);
+    // 3 members x 2 items = 6 in the family; 2 survive, 4 are dropped.
+    expect(plan.itemsDropped).toBe(4);
+    expect(plan.droppedPaths.has(gp.members[0].path)).toBe(false);
+  });
+
+  it("drops a nested child along with its absorbed parent", () => {
+    // Nothing in PNC's file nests under an absorbed member, but a lender file
+    // could — and counting such a child as written while the server refuses to
+    // place it (its parent has no id) is exactly the disagreement planCollapse
+    // exists to prevent.
+    const nested = parseOutline([
+      ["", "1. Section"],
+      ["", "a. First"],
+      ["", "", "Shared item"],
+      ["", "b. Second"],
+      ["", "", "Shared item"],
+      ["", "", "i. A child of the absorbed block"],
+      // The leading "" matters: without it this text lands in the HEADING
+      // column, matches no convention, and is discarded. That was a genuine
+      // typo in the first version of this fixture, and it is the reason
+      // parseOutline now reports unparsedRows at all.
+      ["", "1", "An item under that child"],
+    ]);
+    const fams = detectFamilies(nested);
+    expect(fams).toHaveLength(1);
+    const plan = planCollapse(nested, [
+      { memberPaths: fams[0].members.map((m) => m.path) },
+    ]);
+    // Absorbed: "b" plus its child. Its child's item is dropped too.
+    expect(plan.blocksCombined).toBe(1);
+    expect(plan.itemsDropped).toBe(2);
+    // Written: section 1, subsection a. The child under b is NOT counted.
+    expect(plan.groupsToWrite).toBe(2);
+    expect(plan.itemsToWrite).toBe(1);
+  });
+
+  it("counts groups consistently with the drop set", () => {
+    const plan = planCollapse(parsed, collapses);
+    let total = 0;
+    const walk = (ns: typeof parsed.sections) => {
+      for (const n of ns) {
+        total++;
+        walk(n.children);
+      }
+    };
+    walk(parsed.sections);
+    expect(plan.groupsToWrite).toBe(total - plan.blocksCombined);
   });
 });
 

@@ -884,15 +884,31 @@ export function DiligenceShell({
                     if (v !== BULK_PLACEHOLDER) adoptPacket(v);
                   }}
                 >
-                  <SelectTrigger className="h-8 text-[12px] w-[180px]">
+                  <SelectTrigger className="h-8 text-[12px] w-[220px]">
                     <SelectValue placeholder="+ Add packet…">
                       + Add packet…
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
+                    {/* THE TEMPLATE NAME IS THE IDENTITY, financier is context.
+                        This read `{t.financierName ?? t.name}`, which showed
+                        ONLY the financier whenever one was set — so two PNC
+                        templates both rendered as "PNC Bank" and nothing on
+                        screen told them apart. Round 54 hit exactly that: two
+                        identical options, one of them a packet the tester was
+                        forbidden to touch, resolvable only by reading React
+                        internals. Adopting the wrong packet onto a live deal
+                        was a coin flip. */}
                     {availableTemplates.map((t) => (
                       <SelectItem key={t.id} value={t.id}>
-                        {t.financierName ?? t.name}
+                        <span className="flex flex-col items-start leading-tight">
+                          <span>{t.name}</span>
+                          {t.financierName && t.financierName !== t.name && (
+                            <span className="text-[10.5px] text-nurock-slate-light">
+                              {t.financierName}
+                            </span>
+                          )}
+                        </span>
                       </SelectItem>
                     ))}
                   </SelectContent>

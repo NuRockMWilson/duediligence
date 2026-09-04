@@ -1523,11 +1523,25 @@ function DetailDrawer({
                             )}
                             <span className="truncate">{band.group.label}</span>
                             {band.group.isEntityParameterized && (
-                              /* Declared for the per-entity work; nothing
-                                 replicates yet, so the badge says so rather
-                                 than implying behaviour that does not exist. */
+                              /* "(not yet replicated)" USED TO BE HERE AND WAS
+                                 CORRECT — the flag was declared ahead of the
+                                 entity layer and nothing acted on it. It is now
+                                 WRONG in the more dangerous direction: naming
+                                 parties in a deal's org chart does create a set
+                                 of items per party. A badge that says nothing
+                                 happens, when something does, is worse than no
+                                 badge.
+
+                                 The role is humanised rather than printed raw —
+                                 round 54 caught "per general_partner" leaking
+                                 the enum into UI text. This is the key made
+                                 readable, not the catalog's display label
+                                 (which would need threading the role table
+                                 through this read layer); for the seeded roles
+                                 the two differ only as "Contractor" vs
+                                 "General Contractor". */
                               <span className="normal-case tracking-normal text-[10px] text-nurock-tan-dark">
-                                per {band.group.entityRole} (not yet replicated)
+                                repeats per {humanizeRole(band.group.entityRole)}
                               </span>
                             )}
                             <span className="normal-case tracking-normal text-[10px] text-nurock-slate-light">
@@ -1959,4 +1973,19 @@ function DetailDrawer({
       />
     </Sheet>
   );
+}
+
+/**
+ * An entity_role key, made readable: "general_partner" -> "General Partner".
+ *
+ * Keys are stored snake_case because they are foreign keys into
+ * nurock_diligence_entity_roles. Rendering one verbatim leaks the enum into UI
+ * text, which round 54 caught in this drawer.
+ */
+function humanizeRole(key: string | null): string {
+  if (!key) return "party";
+  return key
+    .split("_")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
 }
