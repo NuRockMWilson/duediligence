@@ -219,6 +219,22 @@ export function OrgChartDialog({
                   </div>
                 )}
 
+                {/* "WIRED BUT EMPTY" MUST NOT LOOK LIKE "NOT WIRED".
+                    Round 54 reported that no card offered existing names and
+                    read that as the catalog not being connected. It is
+                    connected — there simply are no entities in these roles yet,
+                    because nothing has ever created one. But the UI showed a
+                    bare text input either way, so the two states were
+                    indistinguishable from the outside. Now the empty state says
+                    what it is, and what typing a name will do. */}
+                {options.length === 0 && (
+                  <div className="text-[11px] text-nurock-slate-light">
+                    No {role.label.toLowerCase()} on file yet. The first name you
+                    type is saved for reuse, so later deals can pick it instead
+                    of retyping it.
+                  </div>
+                )}
+
                 <div className="space-y-1.5">
                   {roleRows.map((r) => (
                     <div key={r.key} className="flex items-center gap-1.5">
