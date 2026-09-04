@@ -2,52 +2,52 @@ import { NextRequest, NextResponse } from "next/server";
 import { runDiligenceDigest } from "@/lib/diligence/digest";
 
 // =============================================================================
-// Scheduled outstanding-items digest (Increment 2)
-//
-// ⚠️ THE SCHEDULE IS DISABLED as of 2026-09-01, on the CFO's instruction. The
-// route itself is left intact and manually invokable.
+// Scheduled outstanding-items digest
 // =============================================================================
-// WHY IT WAS DISABLED RATHER THAN FIXED.
+// RE-ENABLED 2026-09-04, on Michael's instruction to wire emailed reminders.
 //
-// This job could not write. Vercel Cron sends no cookies, so `createClient()`
-// here yields the `anon` role, and `has_table_privilege('anon',
-// 'dm_notifications', 'insert')` measured FALSE on 2026-09-01 — anon writes were
-// revoked schema-wide on 2026-08-08. Every insert this job attempted was refused.
+// IT WAS DISABLED ON 2026-09-01 FOR TWO REASONS, and both are now addressed.
 //
-// It did not fail visibly. `sendNotification` logged the error and returned, and
-// this route reported `ok: true` with a non-zero `assigneesNotified` count taken
-// from the number of assignees it INTENDED to notify. So the digest has been
-// reporting success while posting nothing, for an unknown period.
+//   1. IT COULD NOT WRITE. Vercel Cron sends no cookies, so createClient() here
+//      yields `anon`; anon writes were revoked schema-wide on 2026-08-08 and
+//      app_users.email is not even READABLE by anon. Every insert was refused.
+//   2. IT LIED ABOUT IT. The route reported ok:true with a count of assignees it
+//      INTENDED to notify, so it claimed success while delivering nothing for
+//      months. dm_notifications still holds exactly one row in the platform.
 //
-// Corroborating evidence: `dm_notifications` contains exactly ONE row in the
-// entire platform — a `pm_handoff` from 2026-05-28. Nothing digest-shaped has
-// ever been delivered. Nobody reported it missing, which is why disabling was
-// chosen over building it a write path: there is no evidence the feature is
-// wanted, and speculative infrastructure for an unexercised feature is the wrong
-// trade.
+// It was disabled rather than fixed because there was no evidence the feature was
+// wanted. Michael asking for it is that evidence.
 //
-// TO RE-ENABLE, two things are needed and the ORDER MATTERS:
+// HOW THE WRITE PATH WORKS NOW, and why it is not a service_role key: there is no
+// service-role client in any of the three NuRock apps, which is exactly why RLS
+// is the whole access-control model — introducing the first bypass for the least
+// critical feature would undo that. Instead, two SECURITY DEFINER functions
+// (20260904_diligence_reminder_digest.sql) compute everything internally:
 //
-//   1. Give it a legitimate write path. It needs one, and a `service_role` key
-//      is the WRONG answer — there is no service-role client anywhere in any of
-//      the three NuRock apps, and RLS is consequently the entire access control
-//      model. Introducing the first bypass for the least important feature would
-//      undo that. The right mechanism is a SECURITY DEFINER function that this
-//      route calls by RPC, with EXECUTE granted to `anon`.
-//      ⚠️ THAT FUNCTION MUST TAKE NO RECIPIENT, SUBJECT OR BODY FROM THE CALLER.
-//      It computes all of that internally from deal state (which the digest
-//      already does). Otherwise it is an open notification-injection endpoint
-//      reachable by anyone — the same defect as the unguarded
-//      nudgeDiligenceAssignee action, in a worse place.
+//     app_diligence_due_digests(secret)          who is due, and what to tell them
+//     app_diligence_mark_digest_sent(secret, [])  recorded ONLY after a send lands
 //
-//   2. Restore the schedule in vercel.json, which was:
-//        { "crons": [ { "path": "/api/cron/diligence-digest",
-//                       "schedule": "0 13 * * 1" } ] }
-//      (Mondays at 13:00 UTC.)
+// Both verify a secret against dm_cron_secrets — a table with RLS on, no policies
+// and no grants, so only a definer function can read it — and NEITHER takes a
+// recipient, subject or body from the caller. That last part is what keeps
+// EXECUTE-to-anon from being a public endpoint that leaks every user's address
+// and workload, which is the same defect class as the unguarded
+// nudgeDiligenceAssignee action this program already closed.
 //
-// The reporting lie is fixed regardless: runDiligenceDigest now counts sends
-// that actually landed and returns `assigneesFailed`, so a manual invocation
-// tells the truth about what happened.
+// THE REPORTING NO LONGER OVERSTATES. runDiligenceDigest counts sends Resend
+// ACCEPTED, returns assigneesFailed separately, and distinguishes "ran and found
+// nobody due" from "could not run" via a `skipped` reason. If Resend is not
+// configured it stops before reading anything and says so.
+//
+// SCHEDULE: daily at 13:00 UTC. Daily is the CRON frequency, not the user's —
+// each person's cadence (off / daily / weekly / monthly) lives in
+// dm_diligence_reminder_prefs and the SQL function only returns those whose
+// interval has elapsed. A weekly cron could not deliver a daily preference, so
+// the job runs at the finest granularity any user can choose.
+//
+// MICHAEL MUST STILL DO TWO THINGS or this delivers nothing (and says so):
+//   * INSERT the digest secret into dm_cron_secrets, matching CRON_SECRET;
+//   * set RESEND_API_KEY and RESEND_FROM once IT finishes the domain.
 // =============================================================================
 // When CRON_SECRET is set, the request must carry
 // `Authorization: Bearer <CRON_SECRET>`, which also permits manual triggering.

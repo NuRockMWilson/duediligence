@@ -23,13 +23,14 @@
 
 import type { ComponentType } from "react";
 import {
-  Calendar,
   ArrowRightLeft,
-  Network,
   Building2,
+  Calendar,
   ClipboardList,
-  Users,
+  Mail,
+  Network,
   Shield,
+  Users,
 } from "lucide-react";
 
 // Development app base — where the org-wide config sections live. Override via
@@ -89,6 +90,14 @@ export const SETTINGS_NAV: SettingsNavGroup[] = [
         href: "/settings/diligence-templates",
         label: "Diligence Templates",
         icon: ClipboardList,
+      },
+      {
+        // Per-user, deliberately NOT adminOnly: your own reminder cadence is
+        // personal, and the people most likely to want it are the ones assigned
+        // items rather than the ones administering the platform.
+        href: "/settings/reminders",
+        label: "Diligence Reminders",
+        icon: Mail,
       },
     ],
   },
