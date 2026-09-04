@@ -1,12 +1,15 @@
 # Template-owned item groups — design (ASK 6, and the schema ASK 2 was waiting on)
 
-**Status:** migration written, not run. `supabase/migrations/20260903_diligence_item_groups.sql`
-**Verifier:** four scripts in `scripts/diagnostics/`, run in order after the migration —
-`20260903_verify_groups_1_structure.sql` (read-only, returns a table),
-`..._2_depth.sql`, `..._3_integrity.sql`, `..._4_detach.sql` (each creates a throwaway template and
-ends by RAISING, which is what rolls it back). Every line must read `PASS`.
-Split from one 300-line file after it failed twice on plpgsql type resolution that no checker
-available here can see — see §6.
+**Status:** `supabase/migrations/20260903_diligence_item_groups.sql` — **APPLIED and VERIFIED**
+2026-09-04 (31 assertions across four scripts, 0 leftover fixtures). The UI shipped in `897e21c`
+and the importer in `28d18b4`, so ASK 6 (a)–(f) is complete and live.
+**Phase 2 (ASK 2 entities):** `supabase/migrations/20260904_diligence_entities.sql` — written, **not
+yet run**. See §7, which now records the decisions rather than the open questions.
+**Verifiers:** groups — four scripts in `scripts/diagnostics/20260903_verify_groups_*`; entities —
+two in `20260904_verify_entities_*`. Script 1 of each is catalog-only and read-only; the rest create
+throwaway fixtures and end by RAISING, which is what rolls them back. Every line must read `PASS`.
+The groups verifier was split from one 300-line file after it failed twice on plpgsql errors no
+checker available here can see — see §6.
 **Author:** Claude, 2026-09-03. Michael runs all SQL; nobody else.
 
 ---
@@ -156,30 +159,70 @@ design reflects the lesson:
 - Every appended report line goes through `format()`. Not one bare literal, which is the exact bug
   from (2), and a checker now greps for that pattern specifically.
 
-## 7. Phase 2 — entities (ASK 2), and the questions only you can answer
+## 7. Phase 2 — entities (ASK 2): DECIDED, and the migration written
 
-The browser session's architectural point is right and worth restating: **a per-entity block is a
-group that repeats per named entity.** Settling groups settles both asks. `is_entity_parameterized`
-and `entity_role` are declared now so the entity migration adds only the deal side, not a second
-round of template surgery.
+**Status:** `supabase/migrations/20260904_diligence_entities.sql`, written 2026-09-04, not yet run.
+Verifiers: `20260904_verify_entities_1_structure.sql` (catalog-only, works before or after) and
+`..._2_behaviour.sql` (fixtures, ends by raising, changes nothing).
 
-I have **not** written that migration, because it turns on decisions that are yours:
+A per-entity block **is** a group that repeats per named entity — the live session's point, and it is
+why `is_entity_parameterized` and `entity_role` were declared in the groups migration: this phase
+adds only the deal side.
 
-1. **What is the entity-role vocabulary?** PNC's file implies at least *partnership*, *general
-   partner*, *developer*, *sponsor*, *guarantor*. Is that list fixed platform-wide, per template, or
-   free text? A fixed list is checkable and will be wrong for some lender; free text always fits and
-   can never be reported on consistently.
-2. **Are named entities per deal or reusable across deals?** A guarantor who appears on nine deals is
-   either nine rows or one row referenced nine times. The second is right if you ever want *"every
-   deal this guarantor is on"*; the first is far less work.
-3. **Do entity items get their own sign-off chain,** or does the group sign off once? This decides
-   whether `dm_diligence_deal_items` grows an `entity_id` or whether entities are display-only.
+I originally left three questions for Michael. He said to start, so they are **answered below with
+the reasoning**, and each is stated so it can be overruled. Two I consider settled by the domain; the
+third is the expensive one and the one to challenge if any.
 
-That third question is the expensive one, and here is the trap it hides. The spine is
-`UNIQUE (deal_id, item_id)`. Adding `entity_id` makes it `UNIQUE (deal_id, item_id, entity_id)` — and
-**Postgres treats NULLs as distinct in a unique constraint**, so every ungrouped item (`entity_id`
-NULL, which is all 62 of them today) would permit unlimited duplicates. The fix is two partial unique
-indexes rather than one constraint:
+### Q1. The entity-role vocabulary → a seeded catalog TABLE
+
+Not a `CHECK`, not free text. The question as I posed it was a false choice — *"a fixed list will be
+wrong for some lender; free text can never be reported on consistently."* A catalog table dissolves
+it: roles are **rows**, so adding `co-developer` for one lender is an `INSERT` Michael can do without
+a migration, while the foreign key keeps *"every guarantor across the portfolio"* answerable. Free
+text would have made that query return `Guarantor`, `guarantor` and `GUARANTOR` as three things.
+
+Seeded with the LIHTC set PNC's structure implies: ownership, general partner, developer, sponsor,
+guarantor, contractor, management agent.
+
+### Q2. Per-deal or reusable → REUSABLE, org catalog plus a deal join
+
+*"Every deal this guarantor is on"* is a real CFO question, and LIHTC sponsors and guarantors
+genuinely recur — the same few principals guarantee many deals. Nine copies of one guarantor cannot
+answer that at all.
+
+**The cost I accepted, stated plainly:** reuse needs someone to notice that "Smith Family Trust" and
+"The Smith Family Trust" are the same entity, and nothing here forces that. It is *mitigated*, not
+solved — `dm_diligence_deal_entities.display_name` lets a deal label an entity differently without
+forking it, so differing paperwork does not create duplicates. If duplicates accumulate anyway,
+merging is a later problem with a small blast radius: the join is the only thing pointing at an
+entity.
+
+### Q3. Their own sign-off chain → YES, `entity_id` on the spine
+
+**This is the expensive one and the one to overrule if any.** I chose it because the source document
+answers it: PNC lists guarantors i/ii/iii as separate blocks with separate items, which only means
+anything if each is tracked, assigned, documented and signed off separately.
+
+The cheap alternative — display-only entities — renders three headings over **one shared item**, so
+approving it for guarantor i marks it approved for all three. That is a false record on a
+cost-certification-adjacent checklist.
+
+`dm_diligence_signoffs` already keys on `deal_item_id`, so per-entity items get their own chains with
+**no change to the sign-off tables**. That is the payoff for putting the dimension on the spine
+rather than beside it.
+
+**If you overrule:** leave the column, stop the code populating it. It is nullable and every existing
+row stays NULL, so display-only stays reachable without reverting anything.
+
+### The NULL trap, which is why this needed a migration and not a patch
+
+The spine was `UNIQUE (deal_id, item_id)`. Folding `entity_id` into that constraint would be a silent
+data-integrity failure: **Postgres treats NULLs as distinct in a unique constraint**, so every
+non-entity row — all 62 today, and all of them forever on non-entity items — would permit unlimited
+duplicates. `ensureDealItems` is self-healing and runs on **every diligence page load**, so it would
+have inserted a fresh duplicate set on each page view until the table was unusable.
+
+Two **partial** unique indexes instead, which say what they mean:
 
 ```sql
 CREATE UNIQUE INDEX ... ON dm_diligence_deal_items (deal_id, item_id)
@@ -188,11 +231,19 @@ CREATE UNIQUE INDEX ... ON dm_diligence_deal_items (deal_id, item_id, entity_id)
   WHERE entity_id IS NOT NULL;
 ```
 
-(`UNIQUE NULLS NOT DISTINCT` would also work on PG 15+, but the paired partial indexes are
-version-proof and say what they mean.)
+`UNIQUE NULLS NOT DISTINCT` would also work on PG 15+, but the partial pair is version-proof and
+self-documenting. **Check 5 of verifier 2 is the one that matters** — it proves a duplicate
+non-entity row is refused while the same item for two different entities is allowed.
 
-Answer 1–3 and I'll write that migration the same way as this one: pre-flight, explicit grants, and a
-self-asserting verifier.
+The old constraint is dropped **by looking up its name**, not by guessing: `0081` declared it inline,
+so the name is system-generated and a guess would leave the old rule in force beside the new ones.
+
+### What still needs code (not schema, so not Michael's to run)
+
+`ensureDealItems` must instantiate an entity-parameterized group's items **once per deal entity of
+that role**, and the checklist must render entities as collapsible groups with an entity filter —
+never as tabs, since membership overlaps. Plus a deal-level UI to name the entities in the first
+place. None of that exists yet; the schema is what this phase delivers.
 
 ## 8. Code that follows the migration (not schema, so not yours to run)
 
