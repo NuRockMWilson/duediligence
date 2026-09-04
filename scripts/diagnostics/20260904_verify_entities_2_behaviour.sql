@@ -48,27 +48,38 @@ BEGIN
   -- Fixtures. A throwaway deal so nothing real is touched, plus two entities.
   -- ==========================================================================
   v_deal := 'zz_verify_entities_' || substr(md5(random()::text), 1, 8);
-  -- owner_id is NOT NULL on deals, which the first version of this script did
-  -- not supply -- it failed with 23502 before running a single check. Three
-  -- fallbacks, because the value differs by who is running this: auth.uid() is
-  -- NULL in the SQL editor (Michael runs as a superuser, not through PostgREST),
-  -- so it falls back to an existing owner and finally to a literal.
+
+  -- ==========================================================================
+  -- CLONE AN EXISTING DEAL ROW rather than enumerate its NOT NULL columns.
+  -- ==========================================================================
+  -- I tried listing columns twice and failed twice: first owner_id (23502), then
+  -- model (23502). Guessing a table's mandatory columns one error at a time is
+  -- not a method -- `deals` carries eighteen columns and I cannot query the live
+  -- schema from here, so the next attempt would have found a third.
   --
-  -- A THROWAWAY DEAL, not an existing one, and that is deliberate rather than
-  -- tidy. Check 5a inserts a DUPLICATE (deal_id, item_id) and expects a refusal.
-  -- On a real deal that already tracks the chosen item, the first insert would
-  -- collide instead of the second -- so 5a would PASS FOR THE WRONG REASON and
-  -- prove nothing about the partial index. A fresh deal tracks nothing, so the
-  -- first insert must succeed and only the second may fail.
-  INSERT INTO deals (id, name, stage, owner_id)
-    VALUES (
-      v_deal, 'ZZ VERIFY ENTITIES', 'underwriting',
-      coalesce(
-        auth.uid()::text,
-        (SELECT d.owner_id FROM deals d WHERE d.owner_id IS NOT NULL LIMIT 1),
-        'zz-verify-entities'
-      )
-    );
+  -- Copying a real row satisfies every NOT NULL BY CONSTRUCTION, whatever they
+  -- are and whatever they become. to_jsonb(d) captures the whole row,
+  -- jsonb_build_object overrides only id and name, and jsonb_populate_record
+  -- turns it back into a deals record. Adding a NOT NULL column to `deals`
+  -- tomorrow cannot break this script.
+  --
+  -- The copied `model` may be a large UW payload. That is wasted work inside a
+  -- transaction that is about to roll back, and it is the right trade against a
+  -- fixture that breaks whenever the schema moves.
+  IF NOT EXISTS (SELECT 1 FROM deals WHERE owner_id IS NOT NULL) THEN
+    RAISE EXCEPTION
+      'ABORTING: no existing deal to clone a fixture from. Nothing was changed.';
+  END IF;
+
+  INSERT INTO deals
+  SELECT (jsonb_populate_record(
+            d,
+            to_jsonb(d) || jsonb_build_object('id', v_deal, 'name', 'ZZ VERIFY ENTITIES')
+          )).*
+    FROM deals d
+   WHERE d.owner_id IS NOT NULL
+   ORDER BY d.created_at
+   LIMIT 1;
 
   -- Any existing catalog item will do as the thing being tracked.
   SELECT id INTO v_item FROM nurock_diligence_items WHERE is_active LIMIT 1;
