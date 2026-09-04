@@ -373,7 +373,7 @@ export async function moveTemplateItem(input: {
 
   const { data: row } = await supabase
     .from("nurock_diligence_items")
-    .select("id, template_id, item_number")
+    .select("id, template_id, item_number, group_id")
     .eq("id", input.itemId)
     .maybeSingle();
   if (!row) return { error: "Item not found." };
@@ -381,6 +381,7 @@ export async function moveTemplateItem(input: {
     id: string;
     template_id: string;
     item_number: number | null;
+    group_id: string | null;
   };
   if (me.item_number == null) {
     return { error: "This item has no position to move." };
@@ -390,11 +391,27 @@ export async function moveTemplateItem(input: {
   // client-supplied index: the order the browser rendered may already be stale.
   // And item_number is SPARSE, so "previous" means "greatest number below mine",
   // never "mine − 1".
-  const q = supabase
+  //
+  // REORDER IS WITHIN-GROUP (ASK 6). Once a template has sections, an item moves
+  // among the items in ITS OWN section; the neighbour must share its group_id.
+  // Without this predicate a move-up would swap positions with an item under a
+  // different heading, which reorders one list by silently corrupting another.
+  //
+  // CONSEQUENCE, and it is correct: move-up is a no-op on the FIRST item of a
+  // group even though items are visible above it on screen. Ungrouped items form
+  // their own band (group_id IS NULL) and move among themselves.
+  //
+  // PostgREST has no "equals or is null", and .eq(col, null) matches nothing
+  // rather than matching NULLs — so the ungrouped band needs the .is() form or
+  // every ungrouped item would look like it had no neighbours at all.
+  const base = supabase
     .from("nurock_diligence_items")
     .select("id, item_number")
     .eq("template_id", me.template_id)
     .eq("is_active", true);
+  const q = me.group_id === null
+    ? base.is("group_id", null)
+    : base.eq("group_id", me.group_id);
   const { data: neighbourRow } = await (input.direction === "up"
     ? q.lt("item_number", me.item_number).order("item_number", { ascending: false })
     : q.gt("item_number", me.item_number).order("item_number", { ascending: true })

@@ -39,6 +39,29 @@ export interface TemplateItemLite {
   title: string;
   description: string | null;
   itemType: string;
+  /** Template-owned section this item sits in; NULL = ungrouped (ASK 6). */
+  groupId: string | null;
+}
+
+/**
+ * A template-owned section or subsection (ASK 6).
+ *
+ * ORGANISATIONAL ONLY. Coverage is computed from nurock_diligence_crosswalk and
+ * never reads this — see the note in
+ * supabase/migrations/20260903_diligence_item_groups.sql. `label` is the
+ * financier's OWN wording and is deliberately independent of the canonical 15
+ * categories; `code` is their own numbering, verbatim and never parsed.
+ */
+export interface TemplateGroup {
+  id: string;
+  parentGroupId: string | null;
+  label: string;
+  code: string | null;
+  /** 0 = section, 1 = subsection, 2 = third level. Trigger-maintained. */
+  depth: number;
+  sortOrder: number;
+  isEntityParameterized: boolean;
+  entityRole: string | null;
 }
 
 export interface CanonicalItemLite {
@@ -74,6 +97,15 @@ export interface TemplateDetail {
    * accident.
    */
   retiredItems: TemplateItemLite[];
+  /**
+   * Template-owned sections, already ordered for rendering (ASK 6).
+   *
+   * Flat, not a tree, deliberately: the drawer needs to render a heading then
+   * its items then the next heading, and a nested structure would have to be
+   * flattened again at the point of use. `depth` carries the indent and the
+   * array is in display order, so the consumer walks it once.
+   */
+  groups: TemplateGroup[];
   crosswalk: CrosswalkLink[];
 }
 
@@ -169,7 +201,7 @@ export async function getTemplateDetail(
   // wasteful. `items` still means ACTIVE ONLY to every existing consumer.
   const { data: items } = await supabase
     .from("nurock_diligence_items")
-    .select("id, item_number, code, category, title, description, item_type, is_active")
+    .select("id, item_number, code, category, title, description, item_type, is_active, group_id")
     .eq("template_id", templateId)
     .order("item_number", { ascending: true });
 
@@ -182,6 +214,7 @@ export async function getTemplateDetail(
     description: string | null;
     item_type: string;
     is_active: boolean;
+    group_id: string | null;
   }>;
 
   const toLite = (i: (typeof allRows)[number]): TemplateItemLite => ({
@@ -192,10 +225,82 @@ export async function getTemplateDetail(
     title: i.title,
     description: i.description,
     itemType: i.item_type,
+    groupId: i.group_id ?? null,
   });
 
   const itemRows = allRows.filter((i) => i.is_active).map(toLite);
   const retiredRows = allRows.filter((i) => !i.is_active).map(toLite);
+
+  // ---------------------------------------------------------------------------
+  // Template-owned groups (ASK 6), returned FLAT AND IN DISPLAY ORDER.
+  // ---------------------------------------------------------------------------
+  // Ordering happens here rather than in SQL because it is a TREE walk: a
+  // subsection must follow its own parent, not sit with the other subsections.
+  // `ORDER BY depth, sort_order` would group all the level-1s together, which
+  // reads as a flat list of headings with the hierarchy lost.
+  //
+  // sort_order is deliberately NON-unique (see the migration header — the
+  // opposite choice to items.item_number, whose unique constraint forces a
+  // three-step swap), so `label` breaks ties and ordering stays deterministic.
+  const { data: groupRows } = await supabase
+    .from("nurock_diligence_item_groups")
+    .select(
+      "id, parent_group_id, label, code, depth, sort_order, is_entity_parameterized, entity_role"
+    )
+    .eq("template_id", templateId);
+
+  const rawGroups = ((groupRows ?? []) as Array<{
+    id: string;
+    parent_group_id: string | null;
+    label: string;
+    code: string | null;
+    depth: number;
+    sort_order: number;
+    is_entity_parameterized: boolean;
+    entity_role: string | null;
+  }>).map((g) => ({
+    id: g.id,
+    parentGroupId: g.parent_group_id ?? null,
+    label: g.label,
+    code: g.code,
+    depth: g.depth,
+    sortOrder: g.sort_order,
+    isEntityParameterized: g.is_entity_parameterized,
+    entityRole: g.entity_role ?? null,
+  }));
+
+  const childrenOf = new Map<string | null, TemplateGroup[]>();
+  for (const g of rawGroups) {
+    const key = g.parentGroupId;
+    const arr = childrenOf.get(key) ?? [];
+    arr.push(g);
+    childrenOf.set(key, arr);
+  }
+  for (const arr of childrenOf.values()) {
+    arr.sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
+  }
+
+  // Depth-first, so each heading is immediately followed by its own subtree.
+  // ITERATIVE rather than recursive, and with a visited set: the migration's
+  // trigger refuses cycles, but this read must not be the thing that hangs if a
+  // cycle ever exists (created out of band, or by a future migration that drops
+  // the trigger). A read that can loop forever is worse than one that returns a
+  // short list.
+  const groups: TemplateGroup[] = [];
+  const seen = new Set<string>();
+  const walk = (parentId: string | null) => {
+    for (const g of childrenOf.get(parentId) ?? []) {
+      if (seen.has(g.id)) continue;
+      seen.add(g.id);
+      groups.push(g);
+      walk(g.id);
+    }
+  };
+  walk(null);
+  // Anything unreachable from a root (an orphan whose parent vanished, or a
+  // cycle member) is appended rather than dropped — invisible rows are how a
+  // template silently loses structure.
+  for (const g of rawGroups) if (!seen.has(g.id)) groups.push(g);
 
   // Crosswalk rows touching this template's items (external side).
   const externalItemIds = itemRows.map((i) => i.id);
@@ -231,6 +336,7 @@ export async function getTemplateDetail(
     },
     items: itemRows,
     retiredItems: retiredRows,
+    groups,
     crosswalk,
   };
 }

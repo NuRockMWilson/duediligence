@@ -34,7 +34,12 @@ export type DiligenceAuditEventType =
   // already exist and are reused for the link side regardless of which screen
   // the user was on.
   | "document_uploaded_unfiled"
-  | "document_deleted";
+  | "document_deleted"
+  // Template-owned sections (ASK 6). Organisational changes to a packet's own
+  // structure; they never touch coverage.
+  | "template_group_added"
+  | "template_group_updated"
+  | "template_group_deleted";
 
 export interface DiligenceAuditEvent {
   /** Null for org-level events (e.g. template imports in Settings). */

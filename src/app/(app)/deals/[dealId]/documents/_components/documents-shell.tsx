@@ -485,7 +485,26 @@ export function DocumentsShell({
                     </Button>
                     {canEdit && (
                       <button
-                        onClick={() => setToDelete(selected)}
+                        onClick={() => {
+                          // A WARNING YOU CAN CLICK THROUGH IS NOT A REFUSAL.
+                          // The confirm dialog used to open even when the
+                          // document was linked, explain that deletion was
+                          // blocked, and still offer an ENABLED "Delete
+                          // document" button — so the only way to learn it was
+                          // refused was to attempt a destructive action and read
+                          // the toast. The server refusal is authoritative and
+                          // stays, but the user should not have to trigger it to
+                          // find out. Say no here, before the dialog.
+                          if (selected.linkedItems.length > 0) {
+                            toast.error(
+                              `Linked to ${selected.linkedItems.length} checklist item${
+                                selected.linkedItems.length === 1 ? "" : "s"
+                              } — unlink it there first. Deleting it would remove evidence those items depend on.`
+                            );
+                            return;
+                          }
+                          setToDelete(selected);
+                        }}
                         disabled={busyId === selected.id}
                         className="p-1.5 text-nurock-slate-light hover:text-red-600 disabled:opacity-40"
                         title={
@@ -607,17 +626,15 @@ export function DocumentsShell({
         open={!!toDelete}
         onOpenChange={(o) => !o && setToDelete(null)}
         title="Delete this document?"
+        // ONE MESSAGE, because only one state can reach here now: the trash
+        // control refuses a linked document before opening this dialog, so the
+        // linked branch this used to carry was unreachable copy. The server
+        // still refuses independently — that check is the authority, not this.
         description={
           toDelete
-            ? toDelete.linkedItems.length > 0
-              ? `"${docDisplayName(toDelete)}" is linked to ${
-                  toDelete.linkedItems.length
-                } checklist item${
-                  toDelete.linkedItems.length === 1 ? "" : "s"
-                }. Unlink it from each one first — deleting it would remove evidence those items depend on.`
-              : `"${docDisplayName(
-                  toDelete
-                )}" and its stored file will be permanently deleted. This cannot be undone.`
+            ? `"${docDisplayName(
+                toDelete
+              )}" and its stored file will be permanently deleted. This cannot be undone.`
             : ""
         }
         confirmLabel="Delete document"
