@@ -39,7 +39,8 @@ export type DiligenceAuditEventType =
   // structure; they never touch coverage.
   | "template_group_added"
   | "template_group_updated"
-  | "template_group_deleted";
+  | "template_group_deleted"
+  | "template_group_duplicated";
 
 export interface DiligenceAuditEvent {
   /** Null for org-level events (e.g. template imports in Settings). */

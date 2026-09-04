@@ -26,6 +26,7 @@ import {
   ChevronUp,
   ChevronDown,
   Check,
+  Copy,
 } from "lucide-react";
 import { Card, Badge } from "@/components/nurock-ui";
 import { Button } from "@/components/ui/button";
@@ -93,6 +94,7 @@ import {
   moveTemplateGroup,
   deleteTemplateGroup,
   setTemplateItemGroup,
+  duplicateTemplateGroup,
 } from "../group-actions";
 
 const KIND_LABEL: Record<TemplateKind, string> = {
@@ -110,6 +112,16 @@ const KIND_BADGE: Record<TemplateKind, "navy" | "tan" | "slate" | "green"> = {
   custom: "slate",
 };
 const NONE = "__none__";
+/**
+ * `category` for an item on a lender/investor packet.
+ *
+ * Packet items have no canonical LIHTC category — their relationship to the
+ * master list is the crosswalk. But `category` is text NOT NULL, so it needs a
+ * value, and this sentinel says which kind of value is missing rather than
+ * asserting a wrong one. categoryLabel() falls through to the raw key for
+ * anything unknown, so it renders as "packet" instead of a misleading header.
+ */
+const PACKET_CATEGORY = "packet";
 
 export function TemplatesAdmin({
   templates,
@@ -904,6 +916,26 @@ function DetailDrawer({
     afterMutation();
   }
 
+  async function duplicateGroup(groupId: string, label: string) {
+    setBusyGroupId(groupId);
+    const res = await duplicateTemplateGroup({ groupId });
+    setBusyGroupId(null);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    // Report the ITEM count, because that is the work avoided. Michael's PNC
+    // file has 11 sections collapsing to 3 distinct item-sets — 78 entries.
+    const n = res.copiedItems ?? 0;
+    const subs = res.copiedSubsections ?? 0;
+    toast.success(
+      `Copied "${label}" with ${n} item${n === 1 ? "" : "s"}${
+        subs > 0 ? ` and ${subs} subsection${subs === 1 ? "" : "s"}` : ""
+      }. Rename it to finish.`
+    );
+    afterMutation();
+  }
+
   async function moveGroup(groupId: string, direction: "up" | "down") {
     setBusyGroupId(groupId);
     const res = await moveTemplateGroup({ groupId, direction });
@@ -1211,6 +1243,8 @@ function DetailDrawer({
     DILIGENCE_CATEGORIES[0].key
   );
   const [newCode, setNewCode] = React.useState("");
+  // Requirement 1: on a packet the add form picks a SECTION, not a category.
+  const [newGroupId, setNewGroupId] = React.useState<string>(NONE);
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editTitle, setEditTitle] = React.useState("");
   const [editCategory, setEditCategory] = React.useState("");
@@ -1222,6 +1256,7 @@ function DetailDrawer({
   function resetAdd() {
     setNewTitle("");
     setNewCategory(DILIGENCE_CATEGORIES[0].key);
+    setNewGroupId(NONE);
     setNewCode("");
     setAddOpen(false);
   }
@@ -1232,7 +1267,12 @@ function DetailDrawer({
     const res = await addTemplateItem({
       templateId,
       title: newTitle,
-      category: newCategory,
+      // A PACKET ITEM CARRIES NO CANONICAL CATEGORY. `category` is text NOT NULL
+      // (0081) with no CHECK, so rather than a migration to make it nullable it
+      // takes a stable sentinel meaning "not a canonical category". Making the
+      // column nullable would buy nothing — something still has to render
+      // wherever it is read, and a sentinel says what it means.
+      category: isCanonical ? newCategory : PACKET_CATEGORY,
       description: null,
       code: newCode.trim() || null,
     });
@@ -1240,6 +1280,17 @@ function DetailDrawer({
     if (res.error) {
       toast.error(res.error);
       return;
+    }
+    // File it into the chosen section. A second call rather than a parameter on
+    // addTemplateItem: that action is shared with the canonical list, and adding
+    // a group argument there would put packet structure into a code path the
+    // canonical template also uses.
+    if (!isCanonical && newGroupId !== NONE && res.id) {
+      const fileRes = await setTemplateItemGroup({
+        itemId: res.id,
+        groupId: newGroupId,
+      });
+      if (fileRes.error) toast.error(fileRes.error);
     }
     // ADDING TO THE CANONICAL LIST IS A PORTFOLIO-WIDE CHANGE, not a local one:
     // ensureDealItems() instantiates it on every adopting deal at the next
@@ -1508,6 +1559,21 @@ function DetailDrawer({
                             >
                               <Pencil className="w-3.5 h-3.5" />
                             </button>
+                            {/* COPY A SECTION (requirement 3). PNC's GP tier is
+                                5 sections of the same 7 items, developers 3 x 13,
+                                guarantors 3 x 12 — 78 entries that would
+                                otherwise be typed by hand. Copies the items AND
+                                any subsections; the user renames afterwards. */}
+                            <button
+                              onClick={() =>
+                                duplicateGroup(band.group!.id, band.group!.label)
+                              }
+                              disabled={busyGroupId === band.group.id}
+                              className="p-1 text-nurock-slate-light hover:text-nurock-navy disabled:opacity-30"
+                              title="Duplicate this section and its items"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                            </button>
                             <button
                               onClick={() =>
                                 setGroupToDelete({
@@ -1667,18 +1733,55 @@ function DetailDrawer({
                     }}
                   />
                   <div className="flex items-center gap-2">
-                    <Select value={newCategory} onValueChange={setNewCategory}>
-                      <SelectTrigger className="h-8 text-[12px] flex-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {DILIGENCE_CATEGORIES.map((c) => (
-                          <SelectItem key={c.key} value={c.key}>
-                            {c.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {/* ------------------------------------------------------
+                        REQUIREMENT 1. On a PACKET this picks one of the
+                        TEMPLATE'S OWN sections, not a NuRock category.
+                        ------------------------------------------------------
+                        Michael's point, and it is right: an item added to a
+                        lender packet belongs to that packet. Its relationship to
+                        the master list is the CROSSWALK MAPPING, which is a
+                        separate control ("+ Map to a NuRock-standard item…").
+                        Forcing a canonical category on it stated a relationship
+                        that the crosswalk already expresses properly.
+
+                        His second worry is unfounded and the live session
+                        measured it: adding a packet item does NOT add anything
+                        to the master list. Canonical has been 59 items through
+                        every add, rename, reorder, remove and restore since
+                        round 42.
+
+                        The canonical template still picks a CATEGORY, because
+                        there its 15 headers ARE the structure.
+                    */}
+                    {isCanonical ? (
+                      <Select value={newCategory} onValueChange={setNewCategory}>
+                        <SelectTrigger className="h-8 text-[12px] flex-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {DILIGENCE_CATEGORIES.map((c) => (
+                            <SelectItem key={c.key} value={c.key}>
+                              {c.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Select value={newGroupId} onValueChange={setNewGroupId}>
+                        <SelectTrigger className="h-8 text-[12px] flex-1">
+                          <SelectValue placeholder="No section" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={NONE}>No section</SelectItem>
+                          {(detail?.groups ?? []).map((g) => (
+                            <SelectItem key={g.id} value={g.id}>
+                              {g.code ? `${g.code} · ` : ""}
+                              {g.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
                     <Input
                       value={newCode}
                       onChange={(e) => setNewCode(e.target.value)}

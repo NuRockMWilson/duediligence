@@ -383,3 +383,263 @@ export async function setTemplateItemGroup(input: {
   revalidateTemplates();
   return {};
 }
+
+// -----------------------------------------------------------------------------
+// Duplicate a section, with its items and its subsections
+// -----------------------------------------------------------------------------
+// MEASURED FROM THE SOURCE FILE (Residences at Westview Landing - PNC DD
+// Checklist, 8.26.2026), comparing each section's item titles by exact match and
+// order: ELEVEN SECTIONS COLLAPSE TO THREE DISTINCT ITEM-SETS.
+//
+//   GP tier      5 sections x  7 identical items -> 28 entries avoided
+//   Developers   3 sections x 13 identical items -> 26
+//   Guarantors   3 sections x 12 identical items -> 24
+//
+// 78 item-entries, about a quarter of that checklist's 329 items, and the
+// largest single source of hand-typing in the file. What differs between
+// siblings in a family is only the SECTION NAME and the entity it refers to, so
+// a copy needs no editing pass over the items. The live session checked for
+// near-misses -- a family member with one extra or reworded item, which would
+// make a naive copy silently wrong -- and found none.
+//
+// AND THE HONEST CAVEAT, WHICH MICHAEL SHOULD READ BEFORE USING IT.
+// Those three families ARE the per-entity blocks. Copy and entity-binding are
+// two answers to the same duplication:
+//     COPY   -> five independent item-sets, each maintained separately. The
+//               moment PNC changes one requirement, the change must be repeated
+//               in five places or the sections silently diverge.
+//     ENTITY -> ONE item-set bound to N entities (ASK 2). entity_id is already
+//               on the deal-item spine and dm_diligence_signoffs keys on
+//               deal_item_id, so per-entity sign-off chains come free.
+// Both give separate approvals, so both are correct for sign-off. The only
+// difference is maintenance drift, and drift is what this codebase has paid for
+// most often. So copy exists because it serves ANY repeated section, including
+// non-entity ones, and it is cheap -- but for the GP / developer / guarantor
+// families specifically, entity binding is the better long-term answer.
+// -----------------------------------------------------------------------------
+export async function duplicateTemplateGroup(input: {
+  groupId: string;
+  /** Defaults to the source label plus " (copy)". */
+  newLabel?: string | null;
+}): Promise<{
+  id?: string;
+  copiedItems?: number;
+  copiedSubsections?: number;
+  error?: string;
+}> {
+  await assertDiligenceCan("edit");
+  const supabase = (await createClient()) as AnySb;
+
+  const { data: srcRow } = await supabase
+    .from("nurock_diligence_item_groups")
+    .select(
+      "id, template_id, parent_group_id, label, code, sort_order, is_entity_parameterized, entity_role"
+    )
+    .eq("id", input.groupId)
+    .maybeSingle();
+  if (!srcRow) return { error: "Section not found." };
+  const src = srcRow as {
+    id: string;
+    template_id: string;
+    parent_group_id: string | null;
+    label: string;
+    code: string | null;
+    sort_order: number;
+    is_entity_parameterized: boolean;
+    entity_role: string | null;
+  };
+
+  const label = (input.newLabel ?? "").trim() || `${src.label} (copy)`;
+
+  // THE WHOLE SUBTREE, not just the section. A section whose subsections were
+  // dropped is not a copy of it -- the user would have to rebuild the structure
+  // by hand, which is the work this action exists to remove. Read the template's
+  // groups once and walk in memory rather than querying per level.
+  const { data: allGroups } = await supabase
+    .from("nurock_diligence_item_groups")
+    .select(
+      "id, parent_group_id, label, code, sort_order, is_entity_parameterized, entity_role"
+    )
+    .eq("template_id", src.template_id);
+  type G = {
+    id: string;
+    parent_group_id: string | null;
+    label: string;
+    code: string | null;
+    sort_order: number;
+    is_entity_parameterized: boolean;
+    entity_role: string | null;
+  };
+  const groups = (allGroups ?? []) as G[];
+  const childrenOf = new Map<string, G[]>();
+  for (const g of groups) {
+    if (!g.parent_group_id) continue;
+    const arr = childrenOf.get(g.parent_group_id) ?? [];
+    arr.push(g);
+    childrenOf.set(g.parent_group_id, arr);
+  }
+  for (const arr of childrenOf.values()) {
+    arr.sort(
+      (a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label)
+    );
+  }
+
+  // Every group in the subtree, in creation order (parents first, so a child
+  // always has its new parent's id available when it is inserted).
+  const subtree: G[] = [];
+  const walk = (id: string) => {
+    for (const c of childrenOf.get(id) ?? []) {
+      subtree.push(c);
+      walk(c.id);
+    }
+  };
+  walk(src.id);
+
+  // The copy sits immediately after the source among its siblings. sort_order is
+  // non-unique, so this needs no shuffling of anything else -- the deliberate
+  // payoff of that choice in the groups migration.
+  const { data: created, error: gErr } = await supabase
+    .from("nurock_diligence_item_groups")
+    .insert({
+      template_id: src.template_id,
+      parent_group_id: src.parent_group_id,
+      label,
+      code: src.code,
+      sort_order: src.sort_order + 1,
+      // The entity flag is carried over deliberately: if the source repeats per
+      // guarantor, so does its copy. Silently dropping the flag would make the
+      // copy behave differently from the thing it was copied from, which is
+      // worse than letting the user turn it off.
+      is_entity_parameterized: src.is_entity_parameterized,
+      entity_role: src.entity_role,
+    })
+    .select("id")
+    .single();
+  if (gErr) return { error: groupErrorMessage(gErr) };
+  const newRootId = (created as { id: string }).id;
+
+  // Source group id -> new group id, so items land under the right copy.
+  const idMap = new Map<string, string>([[src.id, newRootId]]);
+  for (const g of subtree) {
+    const newParent = g.parent_group_id ? idMap.get(g.parent_group_id) : null;
+    if (!newParent) continue; // parent failed to copy; skip rather than orphan
+    const { data: cg, error: cgErr } = await supabase
+      .from("nurock_diligence_item_groups")
+      .insert({
+        template_id: src.template_id,
+        parent_group_id: newParent,
+        label: g.label,
+        code: g.code,
+        sort_order: g.sort_order,
+        is_entity_parameterized: g.is_entity_parameterized,
+        entity_role: g.entity_role,
+      })
+      .select("id")
+      .single();
+    if (cgErr) return { error: groupErrorMessage(cgErr) };
+    idMap.set(g.id, (cg as { id: string }).id);
+  }
+
+  // Items across the whole subtree, in item_number order so the copy preserves
+  // the lender's ordering -- which is the point: the families match "exactly and
+  // in the same order".
+  const sourceGroupIds = Array.from(idMap.keys());
+  const { data: srcItems } = await supabase
+    .from("nurock_diligence_items")
+    .select(
+      "id, item_number, code, category, title, description, item_type, default_required, group_id"
+    )
+    .eq("template_id", src.template_id)
+    .eq("is_active", true)
+    .in("group_id", sourceGroupIds)
+    .order("item_number", { ascending: true });
+
+  type I = {
+    item_number: number | null;
+    code: string | null;
+    category: string;
+    title: string;
+    description: string | null;
+    item_type: string;
+    default_required: boolean;
+    group_id: string | null;
+  };
+  const items = (srcItems ?? []) as I[];
+
+  let copiedItems = 0;
+  if (items.length > 0) {
+    // item_number must be unique per template, so the copies APPEND. Read the
+    // MAX including retired rows -- a retired item still occupies its number.
+    const { data: last } = await supabase
+      .from("nurock_diligence_items")
+      .select("item_number")
+      .eq("template_id", src.template_id)
+      .order("item_number", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    let next =
+      ((last as { item_number: number | null } | null)?.item_number ?? 0) + 1;
+
+    const payload = items
+      .map((i) => {
+        const targetGroup = i.group_id ? idMap.get(i.group_id) : null;
+        if (!targetGroup) return null;
+        return {
+          template_id: src.template_id,
+          item_number: next++,
+          title: i.title,
+          code: i.code,
+          category: i.category,
+          description: i.description,
+          item_type: i.item_type,
+          default_required: i.default_required,
+          group_id: targetGroup,
+          is_active: true,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+
+    if (payload.length > 0) {
+      const { error: iErr } = await supabase
+        .from("nurock_diligence_items")
+        .insert(payload);
+      if (iErr) {
+        // Roll the groups back rather than leave an empty copy. Deleting the
+        // root cascades to the copied subsections, and group_id is
+        // ON DELETE SET NULL so any item that DID land is detached, not
+        // destroyed.
+        await supabase
+          .from("nurock_diligence_item_groups")
+          .delete()
+          .eq("id", newRootId);
+        return { error: groupErrorMessage(iErr) };
+      }
+      copiedItems = payload.length;
+    }
+  }
+
+  {
+    const authed = await createClient();
+    const {
+      data: { user },
+    } = await authed.auth.getUser();
+    await logDiligenceEvent(supabase, {
+      dealId: null,
+      actorUserId: user?.id ?? null,
+      eventType: "template_group_duplicated",
+      summary: `Duplicated section "${src.label}" as "${label}" (${copiedItems} item${
+        copiedItems === 1 ? "" : "s"
+      })`,
+      detail: {
+        templateId: src.template_id,
+        sourceGroupId: src.id,
+        newGroupId: newRootId,
+        copiedItems,
+        copiedSubsections: subtree.length,
+      },
+    });
+  }
+
+  revalidateTemplates();
+  return { id: newRootId, copiedItems, copiedSubsections: subtree.length };
+}
