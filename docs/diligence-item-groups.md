@@ -137,11 +137,24 @@ anything are not yet known to work.
 verifier began as one 300-line file and failed twice in Michael's hands:
 
 1. `ERROR 42P01: relation "_verify" does not exist` — it opened with `BEGIN`, created a
-   `CREATE TEMP TABLE … ON COMMIT DROP`, and assumed the script was one transaction. The Supabase
-   editor **commits per statement**, so the temp table was dropped by its own `ON COMMIT DROP` before
-   the next statement ran. The same assumption made the trailing `ROLLBACK` decorative — had the block
-   succeeded, its fixtures would have been **committed** into the shared database. It was broken in
-   the direction that writes, under a header promising it changed nothing.
+   `CREATE TEMP TABLE … ON COMMIT DROP`, and the next statement could not see that table.
+
+   **I recorded the cause as "the editor commits per statement". That is now known to be wrong**, and
+   a wrong recorded lesson is worse than none. On 2026-09-04 the entities migration aborted mid-file
+   and a follow-up query confirmed **all four** of its objects absent — so an explicit
+   `BEGIN…COMMIT` in a multi-statement script *does* hold and *does* roll back on error.
+
+   Two facts, both measured: an explicit transaction holds across statements; a temp table created in
+   one statement was invisible to the next. Together those rule out per-statement commits. The most
+   likely remaining explanation is that the editor's statements do not share one **session** —
+   a temp table is session-scoped, so per-statement connection pooling would produce exactly this —
+   but I have not proven that and am not going to swap one guess for another.
+
+   **The fix is robust either way**, which is why the code was never in doubt: everything happens
+   inside one `DO` block, so it needs neither a shared session nor a particular transaction model.
+   The trailing `ROLLBACK` was the real defect regardless — had the block succeeded, the fixtures
+   would have been committed under a header promising the script changed nothing.
+
 2. `ERROR 22P02: malformed array literal: "PASS  05 …"` — the report accumulated into a `text[]`, and
    `res || 'literal'` with an **untyped** literal makes Postgres prefer `anyarray || anyarray`, so it
    tried to parse the sentence as an array. Checks 01–04 passed only because they used `format()`,
