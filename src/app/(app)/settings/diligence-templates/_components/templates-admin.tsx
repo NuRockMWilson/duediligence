@@ -928,10 +928,16 @@ function DetailDrawer({
     // file has 11 sections collapsing to 3 distinct item-sets — 78 entries.
     const n = res.copiedItems ?? 0;
     const subs = res.copiedSubsections ?? 0;
+    const maps = res.copiedMappings ?? 0;
+    // The MAPPING count is reported because it was the thing that silently did
+    // not happen: the live session found copy saved the 78 duplicate item
+    // entries in PNC's file and none of the crosswalk work. Saying the number
+    // out loud is how a future regression shows up as "0 mappings" instead of
+    // going unnoticed again.
     toast.success(
       `Copied "${label}" with ${n} item${n === 1 ? "" : "s"}${
         subs > 0 ? ` and ${subs} subsection${subs === 1 ? "" : "s"}` : ""
-      }. Rename it to finish.`
+      }${maps > 0 ? `, carrying ${maps} mapping${maps === 1 ? "" : "s"}` : ""}. Rename it to finish.`
     );
     afterMutation();
   }

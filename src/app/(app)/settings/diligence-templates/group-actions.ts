@@ -425,6 +425,8 @@ export async function duplicateTemplateGroup(input: {
   id?: string;
   copiedItems?: number;
   copiedSubsections?: number;
+  /** Crosswalk rows carried over with the copied items. */
+  copiedMappings?: number;
   error?: string;
 }> {
   await assertDiligenceCan("edit");
@@ -449,7 +451,30 @@ export async function duplicateTemplateGroup(input: {
     entity_role: string | null;
   };
 
-  const label = (input.newLabel ?? "").trim() || `${src.label} (copy)`;
+  // FINDING B (live, round 53): four copies were all named exactly
+  // "<name> (copy)", and the item-level section picker then listed three
+  // indistinguishable options for the same label — so a user could not tell
+  // which section an item was filed under. The toast does say "Rename it to
+  // finish", so it was prompted rather than silent, but a prompt is not a fix.
+  // Ordinal-suffix from the second copy onward.
+  let label = (input.newLabel ?? "").trim();
+  if (!label) {
+    const base = `${src.label} (copy`;
+    const taken = new Set(
+      ((await supabase
+        .from("nurock_diligence_item_groups")
+        .select("label")
+        .eq("template_id", src.template_id)
+      ).data ?? [] as Array<{ label: string }>).map((g: { label: string }) => g.label)
+    );
+    label = `${src.label} (copy)`;
+    let n = 2;
+    while (taken.has(label)) {
+      label = `${base} ${n})`;
+      n++;
+      if (n > 200) break; // a template with 200 copies has a different problem
+    }
+  }
 
   // THE WHOLE SUBTREE, not just the section. A section whose subsections were
   // dropped is not a copy of it -- the user would have to rebuild the structure
@@ -555,6 +580,7 @@ export async function duplicateTemplateGroup(input: {
     .order("item_number", { ascending: true });
 
   type I = {
+    id: string;
     item_number: number | null;
     code: string | null;
     category: string;
@@ -567,6 +593,7 @@ export async function duplicateTemplateGroup(input: {
   const items = (srcItems ?? []) as I[];
 
   let copiedItems = 0;
+  let copiedMappings = 0;
   if (items.length > 0) {
     // item_number must be unique per template, so the copies APPEND. Read the
     // MAX including retired rows -- a retired item still occupies its number.
@@ -580,24 +607,33 @@ export async function duplicateTemplateGroup(input: {
     let next =
       ((last as { item_number: number | null } | null)?.item_number ?? 0) + 1;
 
-    const payload = items
+    // Built as PAIRS so the source item id stays alongside the row that copies
+    // it. Needed to repoint the crosswalk afterwards, and keeping them together
+    // means the two arrays cannot fall out of step the way two separate .map()
+    // passes over a filtered list would.
+    const pairs = items
       .map((i) => {
         const targetGroup = i.group_id ? idMap.get(i.group_id) : null;
         if (!targetGroup) return null;
         return {
-          template_id: src.template_id,
-          item_number: next++,
-          title: i.title,
-          code: i.code,
-          category: i.category,
-          description: i.description,
-          item_type: i.item_type,
-          default_required: i.default_required,
-          group_id: targetGroup,
-          is_active: true,
+          sourceId: i.id,
+          row: {
+            template_id: src.template_id,
+            item_number: next++,
+            title: i.title,
+            code: i.code,
+            category: i.category,
+            description: i.description,
+            item_type: i.item_type,
+            default_required: i.default_required,
+            group_id: targetGroup,
+            is_active: true,
+          },
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
+    const payload = pairs.map((p) => p.row);
+    const payloadSourceIds = pairs.map((p) => p.sourceId);
 
     if (payload.length > 0) {
       const { error: iErr } = await supabase
@@ -615,6 +651,90 @@ export async function duplicateTemplateGroup(input: {
         return { error: groupErrorMessage(iErr) };
       }
       copiedItems = payload.length;
+
+      // ===================================================================
+      // FINDING A (live, round 53): THE MAPPINGS DID NOT COME WITH THE COPY.
+      // ===================================================================
+      // Section copy saved the 78 duplicate item ENTRIES in PNC's file and none
+      // of the crosswalk work — that was still 78 mappings by hand, which is the
+      // more tedious half. And it makes no sense on its own terms: the copied
+      // items are the SAME requirements, so the canonical item that satisfies
+      // one satisfies its twin. Carrying the mapping is the default a user would
+      // assume; not carrying it is the surprise.
+      //
+      // canonical_item_id is kept and external_item_id is repointed at the new
+      // item. Correlated by item_number, NOT by array position — PostgREST does
+      // not promise insert order, and this assigned the numbers itself moments
+      // ago so they are a reliable key.
+      const { data: newRows } = await supabase
+        .from("nurock_diligence_items")
+        .select("id, item_number")
+        .eq("template_id", src.template_id)
+        .in("item_number", payload.map((x) => x.item_number));
+      const newIdByNumber = new Map(
+        ((newRows ?? []) as Array<{ id: string; item_number: number }>).map(
+          (r) => [r.item_number, r.id]
+        )
+      );
+      // Source item id -> the new item that copied it.
+      const newIdBySourceId = new Map<string, string>();
+      payload.forEach((row, idx) => {
+        const srcId = payloadSourceIds[idx];
+        const newId = newIdByNumber.get(row.item_number);
+        if (srcId && newId) newIdBySourceId.set(srcId, newId);
+      });
+
+      const srcIds = Array.from(newIdBySourceId.keys());
+      if (srcIds.length > 0) {
+        const { data: xw, error: xwErr } = await supabase
+          .from("nurock_diligence_crosswalk")
+          .select("canonical_item_id, external_item_id, requirement_mode, coverage_weight")
+          .in("external_item_id", srcIds);
+        // AN UNREADABLE CROSSWALK IS NOT AN EMPTY ONE — the defect that hid the
+        // missing table for months. Report it rather than silently copying no
+        // mappings, which would look exactly like "the source had none".
+        if (xwErr) {
+          console.error(
+            "[groups] section copied, but the crosswalk could not be read so no " +
+              "mappings were carried over:",
+            xwErr.message
+          );
+        } else {
+          const rows = ((xw ?? []) as Array<{
+            canonical_item_id: string;
+            external_item_id: string;
+            requirement_mode: "all" | "any";
+            coverage_weight: number;
+          }>)
+            .map((x) => {
+              const target = newIdBySourceId.get(x.external_item_id);
+              if (!target) return null;
+              return {
+                canonical_item_id: x.canonical_item_id,
+                external_item_id: target,
+                requirement_mode: x.requirement_mode,
+                coverage_weight: x.coverage_weight,
+              };
+            })
+            .filter((x): x is NonNullable<typeof x> => x !== null);
+          if (rows.length > 0) {
+            const { error: cErr } = await supabase
+              .from("nurock_diligence_crosswalk")
+              .insert(rows);
+            if (cErr) {
+              // The items ARE copied and usable; only the mappings failed. Do
+              // NOT roll the section back for this — losing a good copy to save
+              // a re-mapping is the worse trade.
+              console.error(
+                "[groups] section copied, but mappings failed to copy:",
+                cErr.message
+              );
+            } else {
+              copiedMappings = rows.length;
+            }
+          }
+        }
+      }
     }
   }
 
@@ -629,17 +749,23 @@ export async function duplicateTemplateGroup(input: {
       eventType: "template_group_duplicated",
       summary: `Duplicated section "${src.label}" as "${label}" (${copiedItems} item${
         copiedItems === 1 ? "" : "s"
-      })`,
+      }, ${copiedMappings} mapping${copiedMappings === 1 ? "" : "s"})`,
       detail: {
         templateId: src.template_id,
         sourceGroupId: src.id,
         newGroupId: newRootId,
         copiedItems,
         copiedSubsections: subtree.length,
+        copiedMappings,
       },
     });
   }
 
   revalidateTemplates();
-  return { id: newRootId, copiedItems, copiedSubsections: subtree.length };
+  return {
+    id: newRootId,
+    copiedItems,
+    copiedSubsections: subtree.length,
+    copiedMappings,
+  };
 }

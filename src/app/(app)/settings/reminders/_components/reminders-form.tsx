@@ -68,8 +68,19 @@ export function RemindersForm({
           is provisioned — but the page does not let anyone believe mail is
           going out when it cannot.
       --------------------------------------------------------------- */}
+      {/* FINDING C (live, round 53): IT RENDERED WHITE, NOT AMBER.
+          Card bakes `bg-white` into its own class list, so bg-nurock-tan/[0.07]
+          on the SAME element gave two background utilities of equal specificity
+          and bg-white won — the computed backgroundColor measured
+          rgb(255,255,255) and the tint never rendered at all. Presence passed,
+          prominence failed. A warning that does not look like one is precisely
+          the failure this notice exists to prevent.
+
+          Now a plain div rather than fighting Card's own utilities: overriding a
+          component's baked-in background by class order works right up until
+          someone reorders a class list. */}
       {!emailConfigured && (
-        <Card className="p-4 border-nurock-tan-dark/40 bg-nurock-tan/[0.07]">
+        <div className="rounded-[10px] border border-nurock-tan-dark/50 bg-[#FDF6EC] p-4 shadow-sm">
           <div className="flex items-start gap-2.5">
             <AlertTriangle className="w-4 h-4 text-nurock-tan-dark flex-shrink-0 mt-0.5" />
             <div className="text-[12.5px] text-nurock-slate">
@@ -84,7 +95,7 @@ export function RemindersForm({
               </p>
             </div>
           </div>
-        </Card>
+        </div>
       )}
 
       <Card className="p-5 space-y-5">
