@@ -425,8 +425,6 @@ export async function duplicateTemplateGroup(input: {
   id?: string;
   copiedItems?: number;
   copiedSubsections?: number;
-  /** Crosswalk rows carried over with the copied items. */
-  copiedMappings?: number;
   error?: string;
 }> {
   await assertDiligenceCan("edit");
@@ -593,7 +591,6 @@ export async function duplicateTemplateGroup(input: {
   const items = (srcItems ?? []) as I[];
 
   let copiedItems = 0;
-  let copiedMappings = 0;
   if (items.length > 0) {
     // item_number must be unique per template, so the copies APPEND. Read the
     // MAX including retired rows -- a retired item still occupies its number.
@@ -653,88 +650,26 @@ export async function duplicateTemplateGroup(input: {
       copiedItems = payload.length;
 
       // ===================================================================
-      // FINDING A (live, round 53): THE MAPPINGS DID NOT COME WITH THE COPY.
+      // MAPPINGS DELIBERATELY DO NOT COPY. MICHAEL'S RULING, 2026-09-04.
       // ===================================================================
-      // Section copy saved the 78 duplicate item ENTRIES in PNC's file and none
-      // of the crosswalk work — that was still 78 mappings by hand, which is the
-      // more tedious half. And it makes no sense on its own terms: the copied
-      // items are the SAME requirements, so the canonical item that satisfies
-      // one satisfies its twin. Carrying the mapping is the default a user would
-      // assume; not carrying it is the surprise.
+      // The live session found copy carried none of the crosswalk links and
+      // argued for cloning them: PNC's repeated blocks are 78 duplicate items,
+      // so cloning would have saved 78 lookups. I built that, and Michael
+      // reversed it.
       //
-      // canonical_item_id is kept and external_item_id is repointed at the new
-      // item. Correlated by item_number, NOT by array position — PostgREST does
-      // not promise insert order, and this assigned the numbers itself moments
-      // ago so they are a reliable key.
-      const { data: newRows } = await supabase
-        .from("nurock_diligence_items")
-        .select("id, item_number")
-        .eq("template_id", src.template_id)
-        .in("item_number", payload.map((x) => x.item_number));
-      const newIdByNumber = new Map(
-        ((newRows ?? []) as Array<{ id: string; item_number: number }>).map(
-          (r) => [r.item_number, r.id]
-        )
-      );
-      // Source item id -> the new item that copied it.
-      const newIdBySourceId = new Map<string, string>();
-      payload.forEach((row, idx) => {
-        const srcId = payloadSourceIds[idx];
-        const newId = newIdByNumber.get(row.item_number);
-        if (srcId && newId) newIdBySourceId.set(srcId, newId);
-      });
-
-      const srcIds = Array.from(newIdBySourceId.keys());
-      if (srcIds.length > 0) {
-        const { data: xw, error: xwErr } = await supabase
-          .from("nurock_diligence_crosswalk")
-          .select("canonical_item_id, external_item_id, requirement_mode, coverage_weight")
-          .in("external_item_id", srcIds);
-        // AN UNREADABLE CROSSWALK IS NOT AN EMPTY ONE — the defect that hid the
-        // missing table for months. Report it rather than silently copying no
-        // mappings, which would look exactly like "the source had none".
-        if (xwErr) {
-          console.error(
-            "[groups] section copied, but the crosswalk could not be read so no " +
-              "mappings were carried over:",
-            xwErr.message
-          );
-        } else {
-          const rows = ((xw ?? []) as Array<{
-            canonical_item_id: string;
-            external_item_id: string;
-            requirement_mode: "all" | "any";
-            coverage_weight: number;
-          }>)
-            .map((x) => {
-              const target = newIdBySourceId.get(x.external_item_id);
-              if (!target) return null;
-              return {
-                canonical_item_id: x.canonical_item_id,
-                external_item_id: target,
-                requirement_mode: x.requirement_mode,
-                coverage_weight: x.coverage_weight,
-              };
-            })
-            .filter((x): x is NonNullable<typeof x> => x !== null);
-          if (rows.length > 0) {
-            const { error: cErr } = await supabase
-              .from("nurock_diligence_crosswalk")
-              .insert(rows);
-            if (cErr) {
-              // The items ARE copied and usable; only the mappings failed. Do
-              // NOT roll the section back for this — losing a good copy to save
-              // a re-mapping is the worse trade.
-              console.error(
-                "[groups] section copied, but mappings failed to copy:",
-                cErr.message
-              );
-            } else {
-              copiedMappings = rows.length;
-            }
-          }
-        }
-      }
+      // His reasoning holds and is the stronger argument: a copied WRONG link
+      // propagates to all five GP sections at once, and you then fix it five
+      // times instead of once. A link is a claim about which NuRock item
+      // satisfies a lender's request, and claims should be made deliberately
+      // rather than inherited.
+      //
+      // The labour argument it gives up is also about to stop applying — see
+      // the note at the top of this function. Michael chose BINDING over
+      // copying for the repeating families, so those 78 items become ONE list
+      // attached to N named parties, mapped once. Copy is for genuinely
+      // one-off duplication, where inheriting a link buys little and risks
+      // spreading a mistake.
+      // ===================================================================
     }
   }
 
@@ -749,14 +684,13 @@ export async function duplicateTemplateGroup(input: {
       eventType: "template_group_duplicated",
       summary: `Duplicated section "${src.label}" as "${label}" (${copiedItems} item${
         copiedItems === 1 ? "" : "s"
-      }, ${copiedMappings} mapping${copiedMappings === 1 ? "" : "s"})`,
+      })`,
       detail: {
         templateId: src.template_id,
         sourceGroupId: src.id,
         newGroupId: newRootId,
         copiedItems,
         copiedSubsections: subtree.length,
-        copiedMappings,
       },
     });
   }
@@ -766,6 +700,5 @@ export async function duplicateTemplateGroup(input: {
     id: newRootId,
     copiedItems,
     copiedSubsections: subtree.length,
-    copiedMappings,
   };
 }
