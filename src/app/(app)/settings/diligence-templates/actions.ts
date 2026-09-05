@@ -16,6 +16,7 @@ import { logDiligenceEvent } from "@/lib/diligence/audit";
 import { assertDiligenceCan } from "@/lib/auth/access";
 import { describeDbError } from "@/lib/diligence/db-errors";
 import { chunk, selectInChunks } from "@/lib/diligence/chunk";
+import { planUnadopt, needsHistoryCheck } from "@/lib/diligence/unadopt-plan";
 import {
   getTemplateDetail,
   type TemplateKind,
@@ -648,25 +649,39 @@ export async function unadoptTemplateForDeal(input: {
       // replicated row still carries the template item's id in item_id, so all
       // of a party's copies are found by the same query. Verified by the
       // arithmetic in round 57, where 64 of the 274 rows were entity-scoped.
+      // EVERY ROW, NOT JUST THE NOT-STARTED ONES.
+      //
+      // This query used to carry `.eq("status", "not_started")`, which made the
+      // KEPT count structurally impossible to get right: a row kept because
+      // someone had WORKED it never entered the set that kept was derived from,
+      // so kept could only ever count not-started rows carrying documents.
+      // Round 60c saw the consequence — 249 rows promised in the dialog, "248
+      // rows deleted" in the toast, and nothing anywhere explaining the missing
+      // one. The delete was correct; the sentence describing it could not be.
+      //
+      // The status filter now happens in code, where both halves of the
+      // partition stay visible: kept = everything that was here − everything
+      // removed.
       const { rows: instRows, error: iErr } = await selectInChunks<
-        { id: string },
+        { id: string; status: string },
         string
       >(itemIds, (batch) =>
         supabase
           .from("dm_diligence_deal_items")
-          .select("id")
+          .select("id, status")
           .eq("deal_id", input.dealId)
           .in("item_id", batch)
-          .eq("status", "not_started")
       );
       if (iErr) {
         return {
           error: `The packet was detached, but its rows could not be listed, so nothing was cleaned up: ${iErr}`,
         };
       }
-      const instanceIds = instRows.map((r) => r.id);
+      // Delete candidates are the not-started ones only. A row with any other
+      // status is kept on its status alone and never needs a document lookup.
+      const instanceIds = needsHistoryCheck(instRows);
 
-      if (instanceIds.length > 0) {
+      if (instRows.length > 0) {
         const [docsRes, signRes] = await Promise.all([
           selectInChunks<{ deal_item_id: string }, string>(
             instanceIds,
@@ -698,8 +713,13 @@ export async function unadoptTemplateForDeal(input: {
           ...docsRes.rows.map((r) => r.deal_item_id),
           ...signRes.rows.map((r) => r.deal_item_id),
         ]);
-        const removable = instanceIds.filter((id) => !touched.has(id));
-        kept = instanceIds.length - removable.length;
+        // ONE TESTED DECISION. planUnadopt derives removable and kept from the
+        // SAME total, so they partition it — the identity the old inline
+        // version could not satisfy, because it computed kept from a set
+        // already filtered to not_started.
+        const plan = planUnadopt(instRows, touched);
+        const removable = plan.removable;
+        kept = plan.kept;
 
         for (const batch of chunk(removable)) {
           const { data: deleted, error: dErr } = await supabase

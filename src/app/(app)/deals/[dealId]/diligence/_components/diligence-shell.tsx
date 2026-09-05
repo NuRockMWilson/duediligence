@@ -535,7 +535,13 @@ export function DiligenceShell({
           // The packet and its own section, so an exported row can be matched
           // back to the lender's document. Both blank for canonical items.
           i.templateName ?? "",
-          [i.groupParentLabel, i.groupLabel].filter(Boolean).join(" > "),
+          // THE SAME SEPARATOR THE UI USES. This was " > " while the checklist
+          // rendered " › ", so the export and the screen spelled one section
+          // two ways — harmless to read, and a trap for anything downstream
+          // matching on the string. The file is already UTF-8 and already
+          // carries "±" and "−" in the variance column, so the character costs
+          // nothing here.
+          [i.groupParentLabel, i.groupLabel].filter(Boolean).join(" › "),
           i.itemNumber ?? "",
           i.title,
           STATUS_META[i.status].label,
@@ -732,9 +738,15 @@ export function DiligenceShell({
       // after the packet is gone — so they are named explicitly.
       const removed = res.removed ?? 0;
       const kept = res.kept ?? 0;
+      // THE TWO NUMBERS MUST RECONCILE OUT LOUD. The confirmation dialog names
+      // the total; this names what became of it. Round 60c had the dialog
+      // promise 249 and the toast report 248, with nothing accounting for the
+      // difference — the count was right and the sentence was silent about the
+      // one row that survived, which is worse than a missing number because two
+      // visible figures disagreed by one and nothing explained why.
       toast.success(
         kept > 0
-          ? `Packet removed — ${removed} untouched row${removed === 1 ? "" : "s"} deleted, ${kept} kept because ${kept === 1 ? "it has" : "they have"} work or documents on ${kept === 1 ? "it" : "them"}.`
+          ? `Packet removed — ${removed} row${removed === 1 ? "" : "s"} deleted, ${kept} kept because ${kept === 1 ? "it has" : "they have"} work or documents on ${kept === 1 ? "it" : "them"}.`
           : `Packet removed — ${removed} row${removed === 1 ? "" : "s"} deleted.`
       );
       router.refresh();
