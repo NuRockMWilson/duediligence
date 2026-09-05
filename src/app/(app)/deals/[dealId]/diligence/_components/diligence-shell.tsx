@@ -717,7 +717,18 @@ export function DiligenceShell({
         toast.error(res.error);
         return;
       }
-      toast.success("Packet removed");
+      // SAY WHAT IT ACTUALLY DID. "Packet removed" was true and useless: the
+      // rule is that untouched rows go and worked rows stay, and until now the
+      // only way to learn which had happened was to count the checklist by
+      // hand. Kept rows are the surprising half — they remain on the checklist
+      // after the packet is gone — so they are named explicitly.
+      const removed = res.removed ?? 0;
+      const kept = res.kept ?? 0;
+      toast.success(
+        kept > 0
+          ? `Packet removed — ${removed} untouched row${removed === 1 ? "" : "s"} deleted, ${kept} kept because ${kept === 1 ? "it has" : "they have"} work or documents on ${kept === 1 ? "it" : "them"}.`
+          : `Packet removed — ${removed} row${removed === 1 ? "" : "s"} deleted.`
+      );
       router.refresh();
     });
   }

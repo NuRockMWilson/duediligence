@@ -11,6 +11,7 @@
 // =============================================================================
 
 import { createClient } from "@/lib/supabase/server";
+import { selectInChunks } from "@/lib/diligence/chunk";
 
 export type DiligenceStatus =
   | "not_started"
@@ -348,13 +349,26 @@ export async function getDiligenceFinancierCoverage(
   const externalItemIds = externalItems.map((i) => i.id);
 
   // Crosswalk rows touching these external items.
-  const { data: xwalk, error: xwalkErr } =
-    externalItemIds.length > 0
-      ? await sb
-          .from("nurock_diligence_crosswalk")
-          .select("canonical_item_id, external_item_id, requirement_mode")
-          .in("external_item_id", externalItemIds)
-      : { data: [], error: null };
+  // CHUNKED. This is on the READ path — it runs on every checklist load — and
+  // a 242-item packet puts ~9KB of ids in a GET query string, past the cap
+  // proxies commonly enforce. The error is at least logged below rather than
+  // swallowed, but a coverage number that fails at exactly the packet sizes it
+  // was built for is not much of a number.
+  const xwalkRes = await selectInChunks<
+    {
+      canonical_item_id: string;
+      external_item_id: string;
+      requirement_mode: "all" | "any";
+    },
+    string
+  >(externalItemIds, (batch) =>
+    sb
+      .from("nurock_diligence_crosswalk")
+      .select("canonical_item_id, external_item_id, requirement_mode")
+      .in("external_item_id", batch)
+  );
+  const xwalk = xwalkRes.rows;
+  const xwalkErr = xwalkRes.error ? { message: xwalkRes.error } : null;
   // AN UNREADABLE CROSSWALK IS NOT AN EMPTY CROSSWALK, and here it changes a
   // NUMBER THE CFO READS. With no rows every external item classifies as
   // "unmapped", so `satisfied` is 0 and the packet reports 0% covered no matter

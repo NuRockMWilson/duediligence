@@ -15,6 +15,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logDiligenceEvent } from "@/lib/diligence/audit";
 import { assertDiligenceCan } from "@/lib/auth/access";
 import { describeDbError } from "@/lib/diligence/db-errors";
+import { chunk, selectInChunks } from "@/lib/diligence/chunk";
 import {
   getTemplateDetail,
   type TemplateKind,
@@ -563,7 +564,13 @@ export async function adoptTemplateForDeal(input: {
 export async function unadoptTemplateForDeal(input: {
   dealId: string;
   templateId: string;
-}): Promise<{ error?: string }> {
+}): Promise<{
+  error?: string;
+  /** Rows deleted because nobody had worked them. */
+  removed?: number;
+  /** Rows KEPT because they carry history — worked, documented or signed off. */
+  kept?: number;
+}> {
   await assertDiligenceCan("edit");
   const authed = await createClient();
   const {
@@ -575,56 +582,134 @@ export async function unadoptTemplateForDeal(input: {
     .delete()
     .eq("deal_id", input.dealId)
     .eq("template_id", input.templateId);
-  if (error) return { error: error.message };
+  if (error) return { error: describeDbError(error) };
 
-  // Part 2: clean up the packet's STANDALONE item instances — but only the
-  // untouched ones (still not started, no documents, no sign-offs). Instances
-  // someone has worked keep their history and stay on the checklist.
+  // ---------------------------------------------------------------------------
+  // Clean up the packet's item instances — ONLY the untouched ones
+  // ---------------------------------------------------------------------------
+  // Instances someone has worked keep their history and stay on the checklist.
+  // That rule is unchanged; what follows is how it is carried out.
+  //
+  // REWRITTEN FOR SCALE AND FOR SILENCE, both exposed by round 57's 242-item
+  // packet producing 274 tracked rows:
+  //
+  //   * THREE UNCHUNKED `.in()` CALLS. supabase-js puts the list in a GET query
+  //     string at ~37 characters an id, so 242 ids is a ~9KB URL — at or past
+  //     the cap proxies commonly enforce. Chunked now.
+  //
+  //   * EVERY READ DISCARDED ITS ERROR. `const { data } = await ...` drops the
+  //     error, a failed read yields null, null reads as "no rows", and no rows
+  //     reads as "nothing to clean up". So the version that could not query
+  //     would delete the adoption row, leave all 274 instances orphaned on the
+  //     checklist, and return success. The scale bug and the silence bug
+  //     together are what made this worth rewriting rather than patching.
+  //
+  //   * THE DELETE'S RESULT WAS NEVER CHECKED, so an RLS no-op was invisible.
+  //
+  // The counts are returned rather than merely logged because "what did that
+  // actually remove" is the first question anyone asks after clicking it, and
+  // until now the only way to answer was to count the checklist by hand.
+  let removed = 0;
+  let kept = 0;
   {
-    const { data: tmplItems } = await supabase
+    const { data: tmplItems, error: tErr } = await supabase
       .from("nurock_diligence_items")
       .select("id")
       .eq("template_id", input.templateId);
+    if (tErr) {
+      return {
+        error:
+          `The packet was detached, but its items could not be read, so nothing was cleaned up: ${describeDbError(tErr)}`,
+      };
+    }
     const itemIds = ((tmplItems ?? []) as Array<{ id: string }>).map((r) => r.id);
+
     if (itemIds.length > 0) {
-      const { data: instances } = await supabase
-        .from("dm_diligence_deal_items")
-        .select("id")
-        .eq("deal_id", input.dealId)
-        .in("item_id", itemIds)
-        .eq("status", "not_started");
-      const instanceIds = ((instances ?? []) as Array<{ id: string }>).map(
-        (r) => r.id
+      // Entity-scoped rows are included here without any special handling: a
+      // replicated row still carries the template item's id in item_id, so all
+      // of a party's copies are found by the same query. Verified by the
+      // arithmetic in round 57, where 64 of the 274 rows were entity-scoped.
+      const { rows: instRows, error: iErr } = await selectInChunks<
+        { id: string },
+        string
+      >(itemIds, (batch) =>
+        supabase
+          .from("dm_diligence_deal_items")
+          .select("id")
+          .eq("deal_id", input.dealId)
+          .in("item_id", batch)
+          .eq("status", "not_started")
       );
+      if (iErr) {
+        return {
+          error: `The packet was detached, but its rows could not be listed, so nothing was cleaned up: ${iErr}`,
+        };
+      }
+      const instanceIds = instRows.map((r) => r.id);
+
       if (instanceIds.length > 0) {
-        const [{ data: withDocs }, { data: withSignoffs }] = await Promise.all([
-          supabase
-            .from("dm_diligence_item_documents")
-            .select("deal_item_id")
-            .in("deal_item_id", instanceIds),
-          supabase
-            .from("dm_diligence_signoffs")
-            .select("deal_item_id")
-            .in("deal_item_id", instanceIds),
+        const [docsRes, signRes] = await Promise.all([
+          selectInChunks<{ deal_item_id: string }, string>(
+            instanceIds,
+            (batch) =>
+              supabase
+                .from("dm_diligence_item_documents")
+                .select("deal_item_id")
+                .in("deal_item_id", batch)
+          ),
+          selectInChunks<{ deal_item_id: string }, string>(
+            instanceIds,
+            (batch) =>
+              supabase
+                .from("dm_diligence_signoffs")
+                .select("deal_item_id")
+                .in("deal_item_id", batch)
+          ),
         ]);
+        if (docsRes.error || signRes.error) {
+          // FAIL CLOSED. Not knowing which rows carry documents means not
+          // knowing which are safe to delete, and deleting on an incomplete
+          // answer would destroy exactly the history this rule protects.
+          return {
+            error:
+              `The packet was detached, but its rows were left in place: the check for attached documents or sign-offs failed (${docsRes.error ?? signRes.error}). Nothing was deleted.`,
+          };
+        }
         const touched = new Set([
-          ...((withDocs ?? []) as Array<{ deal_item_id: string }>).map(
-            (r) => r.deal_item_id
-          ),
-          ...((withSignoffs ?? []) as Array<{ deal_item_id: string }>).map(
-            (r) => r.deal_item_id
-          ),
+          ...docsRes.rows.map((r) => r.deal_item_id),
+          ...signRes.rows.map((r) => r.deal_item_id),
         ]);
         const removable = instanceIds.filter((id) => !touched.has(id));
-        if (removable.length > 0) {
-          await supabase
+        kept = instanceIds.length - removable.length;
+
+        for (const batch of chunk(removable)) {
+          const { data: deleted, error: dErr } = await supabase
             .from("dm_diligence_deal_items")
             .delete()
-            .in("id", removable);
+            .in("id", batch)
+            .select("id");
+          if (dErr) {
+            return {
+              error: `Removed ${removed} row(s), then failed: ${describeDbError(dErr)}`,
+            };
+          }
+          removed += ((deleted ?? []) as unknown[]).length;
+        }
+        if (removable.length > 0 && removed === 0) {
+          return {
+            error:
+              "The packet was detached but none of its rows were removed — check row-level security on dm_diligence_deal_items.",
+          };
         }
       }
     }
   }
+
+  // NOTE: the deal's ORG CHART is deliberately untouched. The parties belong to
+  // the deal, not to the packet — a deal does not stop having three guarantors
+  // because one lender's checklist was detached — and re-adopting the packet
+  // should reproduce the same per-party rows rather than ask for the org chart
+  // again. Removing a party is its own explicit action.
 
   await logDiligenceEvent(supabase, {
     dealId: input.dealId,
