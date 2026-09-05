@@ -17,6 +17,7 @@
 // =============================================================================
 
 import { createClient } from "@/lib/supabase/server";
+import { planInstantiation } from "@/lib/diligence/instantiation-plan";
 import { categoryOrder } from "@/lib/diligence/categories";
 import {
   computeDiligenceRollup,
@@ -354,7 +355,35 @@ export async function ensureDealDiligenceItems(
     // toward the packet's coverage percentage, which now aggregates several
     // entity instances behind one canonical item — a number worth a second look
     // once real per-entity data exists.
-    const [{ data: dealEnts }, { data: paramGroups }] = await Promise.all([
+    // =======================================================================
+    // THESE TWO ERRORS WERE DISCARDED, SIXTY LINES BELOW A COMMENT ABOUT
+    // EXACTLY THAT MISTAKE
+    // =======================================================================
+    // Round 61 adopted this packet with NO parties named and got 242 rows
+    // instead of 210: all 32 items inside the repeating blocks were
+    // instantiated as ordinary standalone rows, filed under headings like
+    // "GP Entity" on a deal that has no GP. Two separate pieces of the
+    // product's own copy promise those sections will not appear until a party
+    // is named, and Michael's spec is explicit — the org chart "determines the
+    // GP sections, developers, guarantors and loans ... based on how many
+    // entries are entered". Zero entries means zero sections.
+    //
+    // paramGroupRole is what enforces that: it excludes parameterized items
+    // from `standalone`. An EMPTY paramGroupRole excludes nothing, so a failed
+    // read of this query is indistinguishable from "no group repeats", and
+    // every parameterized item silently becomes a plain row. Same shape as the
+    // crosswalk failure above, which cost three rounds of investigation.
+    //
+    // So both errors are now checked and both FAIL CLOSED, matching the
+    // crosswalk precedent in this same function: if we cannot tell which
+    // groups repeat, or which parties the deal has, we instantiate NO packet
+    // items rather than the wrong ones. The canonical checklist is unaffected —
+    // it does not depend on either read — so a deal keeps its standard list and
+    // only packet scope is withheld.
+    const [
+      { data: dealEnts, error: dealEntsErr },
+      { data: paramGroups, error: paramGroupsErr },
+    ] = await Promise.all([
       supabase
         .from("dm_diligence_deal_entities")
         .select("entity_id, sort_order, nurock_diligence_entities ( role_key )")
@@ -365,6 +394,17 @@ export async function ensureDealDiligenceItems(
         .in("template_id", adoptedExternal)
         .eq("is_entity_parameterized", true),
     ]);
+    if (paramGroupsErr || dealEntsErr) {
+      console.error(
+        "[diligence] cannot determine which packet sections repeat per party " +
+          "(groups: %s, deal parties: %s). Instantiating NO packet items rather " +
+          "than filing repeating-block items as ordinary rows. The canonical " +
+          "checklist is unaffected.",
+        paramGroupsErr?.message ?? "ok",
+        dealEntsErr?.message ?? "ok"
+      );
+      return insertRows(supabase, dealId, missing);
+    }
 
     type DealEntRow = {
       entity_id: string;
@@ -388,44 +428,60 @@ export async function ensureDealDiligenceItems(
       if (g.entity_role) paramGroupRole.set(g.id, g.entity_role);
     }
 
-    // A parameterized-group item must NOT also be instantiated unscoped, or the
-    // checklist would show a headless copy beside the per-entity ones. So these
-    // are excluded from `standalone` rather than added on top of it.
-    standalone = extRows.filter(
-      (i) =>
-        !mappedSet.has(i.id) &&
-        !have.has(i.id) &&
-        !(i.group_id != null && paramGroupRole.has(i.group_id))
+    // Existing (item, entity) pairs, so repeated page loads do not duplicate.
+    // The partial unique index would refuse a duplicate anyway, but an INSERT
+    // that throws would take the whole self-healing pass down with it.
+    //
+    // Fetched unconditionally now rather than inside a
+    // `paramGroupRole.size > 0 && entitiesByRole.size > 0` guard: the guard was
+    // an optimisation that made the decision depend on where it was written
+    // instead of on the data, and planInstantiation needs the pairs to make the
+    // same call in one place.
+    const { data: existingEnt, error: existingEntErr } = await supabase
+      .from("dm_diligence_deal_items")
+      .select("item_id, entity_id")
+      .eq("deal_id", dealId)
+      .not("entity_id", "is", null);
+    if (existingEntErr) {
+      // Not knowing which per-party rows exist would mean rewriting them, and
+      // the partial unique index would reject the whole insert — taking the
+      // canonical items down with it. Withhold packet scope, keep the standard
+      // checklist.
+      console.error(
+        "[diligence] cannot list existing per-party rows; withholding packet " +
+          "items this pass:",
+        existingEntErr.message
+      );
+      return insertRows(supabase, dealId, missing);
+    }
+    const havePair = new Set(
+      ((existingEnt ?? []) as Array<{ item_id: string; entity_id: string }>).map(
+        (r) => `${r.item_id}|${r.entity_id}`
+      )
     );
 
-    if (paramGroupRole.size > 0 && entitiesByRole.size > 0) {
-      // Existing (item, entity) pairs, so repeated page loads do not duplicate.
-      // The partial unique index would refuse a duplicate anyway, but an INSERT
-      // that throws would take the whole self-healing pass down with it.
-      const { data: existingEnt } = await supabase
-        .from("dm_diligence_deal_items")
-        .select("item_id, entity_id")
-        .eq("deal_id", dealId)
-        .not("entity_id", "is", null);
-      const havePair = new Set(
-        ((existingEnt ?? []) as Array<{ item_id: string; entity_id: string }>).map(
-          (r) => `${r.item_id}|${r.entity_id}`
-        )
+    // ONE TESTED DECISION. The three inputs each fail toward OVER-instantiation
+    // when empty — an empty mappedSet makes everything standalone, an empty
+    // paramGroupRole makes repeating items standalone (round 61's 242), an
+    // empty entitiesByRole makes parameterized sections vanish. Every one of
+    // them is now error-checked above, so "empty" here means empty.
+    const plan = planInstantiation({
+      items: extRows,
+      mapped: mappedSet,
+      have,
+      havePair,
+      paramGroupRole,
+      entitiesByRole,
+    });
+    standalone = plan.standalone;
+    entityScoped.push(...plan.entityScoped);
+    if (plan.awaitingParties > 0) {
+      console.info(
+        "[diligence] %d packet requirement(s) are waiting on the deal's org " +
+          "chart — sections that repeat per party produce no rows until a party " +
+          "of that role is named.",
+        plan.awaitingParties
       );
-
-      for (const item of extRows) {
-        if (item.group_id == null) continue;
-        const role = paramGroupRole.get(item.group_id);
-        if (!role) continue;
-        for (const entityId of entitiesByRole.get(role) ?? []) {
-          if (havePair.has(`${item.id}|${entityId}`)) continue;
-          entityScoped.push({
-            id: item.id,
-            default_required: item.default_required,
-            entity_id: entityId,
-          });
-        }
-      }
     }
     }
   }
@@ -433,15 +489,33 @@ export async function ensureDealDiligenceItems(
   // entity_id is sent as NULL for the unscoped rows rather than omitted, so one
   // insert covers both shapes and the partial unique indexes see the value they
   // are predicated on.
-  const toInsert: Array<{
-    id: string;
-    default_required: boolean;
-    entity_id?: string;
-  }> = [...missing, ...standalone, ...entityScoped];
-  if (toInsert.length === 0) return 0;
+  return insertRows(supabase, dealId, [
+    ...missing,
+    ...standalone,
+    ...entityScoped,
+  ]);
+}
 
+/**
+ * Insert the rows a self-heal pass decided on.
+ *
+ * Extracted so the fail-closed path above can still write the CANONICAL items
+ * while withholding packet scope — a deal must keep its standard checklist even
+ * when we cannot work out which packet sections repeat.
+ *
+ * entity_id is sent as NULL for unscoped rows rather than omitted, so one
+ * insert covers both shapes and the partial unique indexes see the value they
+ * are predicated on.
+ */
+async function insertRows(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  dealId: string,
+  rows: Array<{ id: string; default_required: boolean; entity_id?: string }>
+): Promise<number> {
+  if (rows.length === 0) return 0;
   const { error } = await supabase.from("dm_diligence_deal_items").insert(
-    toInsert.map((m) => ({
+    rows.map((m) => ({
       deal_id: dealId,
       item_id: m.id,
       is_required: m.default_required ?? true,
@@ -452,7 +526,7 @@ export async function ensureDealDiligenceItems(
     console.error("[diligence] ensure insert failed:", error.message);
     return 0;
   }
-  return toInsert.length;
+  return rows.length;
 }
 
 export async function getDiligenceChecklist(
