@@ -6,6 +6,7 @@ import {
   getCurrentUserAccess,
   hasPermission,
   isRbacInitialized,
+  canDiligence,
 } from "@/lib/auth/access";
 import { DiligenceShell } from "./_components/diligence-shell";
 
@@ -43,6 +44,26 @@ export default async function DiligencePage({
     !rbacOn ||
     (access?.isOrgAdmin ?? false) ||
     hasPermission(access, "devmgmt", "approve");
+  // ---------------------------------------------------------------------------
+  // EXPORT, AND THE BUTTON THAT NEVER ASKED
+  // ---------------------------------------------------------------------------
+  // Round 63, as a contributor: "Export PDF" was refused by its server action
+  // ("Your role doesn't allow exporting from Due Diligence") while "Export CSV"
+  // beside it produced a 59-row file. The CSV path is built entirely in the
+  // browser from rows already rendered, so it never consults a permission.
+  //
+  // BE HONEST ABOUT WHAT GATING IT ACHIEVES. The rows are already in that
+  // user's browser — they were delivered to draw the table — so hiding the
+  // button is not a confidentiality barrier and anyone determined can still
+  // copy what is on screen. What it does buy is that the two adjacent controls
+  // labelled "Export" stop disagreeing, and that a role without export is not
+  // handed a one-click way to take the whole checklist out.
+  //
+  // A real barrier would mean not delivering rows the viewer may not export,
+  // which would break the checklist for the very people meant to work it. That
+  // trade is not worth making, and pretending the UI gate is more than it is
+  // would be worse than the inconsistency it replaces.
+  const canExport = await canDiligence("export");
 
   return (
     <DiligenceShell
@@ -52,6 +73,7 @@ export default async function DiligencePage({
       availableTemplates={adoptable.available}
       canEdit={canEdit}
       canApprove={canApprove}
+      canExport={canExport}
     />
   );
 }

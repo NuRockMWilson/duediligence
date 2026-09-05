@@ -160,6 +160,7 @@ export function DiligenceShell({
   availableTemplates,
   canEdit,
   canApprove,
+  canExport,
 }: {
   checklist: DiligenceChecklist;
   financiers: FinancierCoverage[];
@@ -167,6 +168,8 @@ export function DiligenceShell({
   availableTemplates: TemplateSummary[];
   canEdit: boolean;
   canApprove: boolean;
+  /** canDiligence("export") — gates BOTH export controls, see the page note. */
+  canExport: boolean;
 }) {
   const { dealId, dealName, items, team, parties, rollup, library } = checklist;
   const router = useRouter();
@@ -857,15 +860,26 @@ export function DiligenceShell({
               </Button>
             </>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleExport()}
-            className="h-8"
-          >
-            <Download className="w-3.5 h-3.5 mr-1.5" />
-            Export CSV
-          </Button>
+          {/* BOTH EXPORTS, OR NEITHER. Round 63 measured a contributor being
+              refused the PDF ("Your role doesn't allow exporting from Due
+              Diligence") and handed a 59-row CSV by the button beside it — the
+              CSV path builds the file in the browser and never asks the server.
+              Two adjacent controls labelled Export, one permission, opposite
+              answers. The rows are already on that user's screen, so this gate
+              is honesty rather than a barrier; see the note on canExport in the
+              page component. */}
+          {canExport && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleExport()}
+              className="h-8"
+            >
+              <Download className="w-3.5 h-3.5 mr-1.5" />
+              Export CSV
+            </Button>
+          )}
+          {canExport && (
           <Button
             size="sm"
             onClick={() => setExportOpen(true)}
@@ -882,6 +896,7 @@ export function DiligenceShell({
                 actual defect, so the button now says what it produces. */}
             Export PDF
           </Button>
+          )}
         </div>
       </div>
 

@@ -29,7 +29,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { ChevronDown, LogOut, UserRound } from "lucide-react";
-import { SETTINGS_NAV } from "@/lib/settings-nav";
+import { visibleSettingsNav } from "@/lib/settings-nav";
 
 interface AccountMenuProps {
   email: string;
@@ -72,12 +72,11 @@ export default function AccountMenu({
 
   const label = displayName?.trim() || email || "Account";
 
-  // Mirror the settings page, but drop Administration sections for non-admins
-  // and any group left empty as a result.
-  const visibleGroups = SETTINGS_NAV.map((group) => ({
-    ...group,
-    items: group.items.filter((item) => isOrgAdmin || !item.adminOnly),
-  })).filter((group) => group.items.length > 0);
+  // ONE SHARED FILTER, not a second copy of the rule. This block used to hold
+  // its own inline version of exactly this logic while the settings sidebar
+  // held none — which is how the two surfaces came to show a contributor seven
+  // sections here and nine there. The rule now lives with the list it filters.
+  const visibleGroups = visibleSettingsNav(isOrgAdmin);
 
   return (
     <div ref={wrapperRef} className="relative">

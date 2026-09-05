@@ -47,9 +47,17 @@ export interface SettingsNavItem {
   /** True when href points to another app (devmgmt) rather than a local route. */
   external?: boolean;
   /**
-   * Administration sections are surfaced in the account-menu dropdown only to
-   * org admins (the settings sidebar still lists them for everyone; the pages
-   * themselves enforce access). Keeps a non-admin's account menu uncluttered.
+   * Org-admin-only section. Hidden from BOTH nav surfaces for everyone else.
+   *
+   * This used to read "the settings sidebar still lists them for everyone; the
+   * pages themselves enforce access" — a deliberate split that rested on a
+   * premise nobody had checked. Live round 63 checked it: /settings/team
+   * enforces and redirects, /settings/admin had NO gate at all, and the sidebar
+   * linked a contributor straight to org-wide draw-submission configuration.
+   * The account menu filtered it; the sidebar did not.
+   *
+   * So the flag now means the same thing on both surfaces, and the pages
+   * enforce as well. Hiding is convenience; the page gate is the control.
    */
   adminOnly?: boolean;
 }
@@ -57,6 +65,21 @@ export interface SettingsNavItem {
 export interface SettingsNavGroup {
   label: string;
   items: SettingsNavItem[];
+}
+
+/**
+ * The nav as a given user should see it.
+ *
+ * THE FILTER LIVES WITH THE LIST, deliberately. The list was already a single
+ * source of truth and the two surfaces still drifted, because each renderer had
+ * to remember to apply `adminOnly` itself — and one of them forgot. A shared
+ * list with a per-renderer filter is not a single source of truth; this is.
+ */
+export function visibleSettingsNav(isOrgAdmin: boolean): SettingsNavGroup[] {
+  return SETTINGS_NAV.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => isOrgAdmin || !item.adminOnly),
+  })).filter((group) => group.items.length > 0);
 }
 
 export const SETTINGS_NAV: SettingsNavGroup[] = [
