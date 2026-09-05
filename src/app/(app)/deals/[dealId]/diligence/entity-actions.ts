@@ -451,10 +451,32 @@ export async function setDealEntityDisplayName(input: {
 /**
  * Remove a party from THIS DEAL. The catalog row survives.
  *
- * Refuses while that party still has tracked items with any history, for the
- * same reason unadoptTemplateForDeal only cleans up untouched instances: a
- * signed-off document is a record, and unlinking the party it belongs to would
- * strip it from the checklist with no trace of why.
+ * -----------------------------------------------------------------------------
+ * ALL-OR-NOTHING, AND DELIBERATELY *NOT* THE SAME RULE AS UNADOPT
+ * -----------------------------------------------------------------------------
+ * An earlier version of this comment claimed this refuses "for the same reason
+ * unadoptTemplateForDeal only cleans up untouched instances". That was wrong,
+ * and round 60b caught the two rules diverging in the UI copy:
+ *
+ *   unadopt        deletes untouched rows, KEEPS worked ones
+ *   remove party   refuses ENTIRELY if any row is worked
+ *
+ * The divergence is right, and the reason is display rather than preservation.
+ * An unadopted packet's kept rows still carry their own titles and sections, so
+ * they remain readable on the checklist. A removed party's kept rows would lose
+ * the thing that identifies them: entityName resolves through the deal link, so
+ * dropping the link makes every one of that party's rows fall back to the block
+ * name — "GP Entity" — with no way to tell whose documents they were. Worse,
+ * dm_diligence_deal_items.entity_id still references the catalog row, so the
+ * party could not then be deleted from the catalog either.
+ *
+ * Partially removing a party therefore produces a state that is both unreadable
+ * and unresolvable. Refusing, and saying which items are in the way, leaves the
+ * user somewhere they can act from.
+ *
+ * If these two rules ever need to agree, this is the one to change — unadopt's
+ * behaviour is load-bearing for preserving collected work across a packet
+ * swap.
  */
 export async function removeDealEntity(input: {
   dealId: string;
@@ -501,12 +523,17 @@ export async function removeDealEntity(input: {
       ]).size + started.length;
 
     if (touchedCount > 0) {
+      // NAME THE WAY OUT, not just the blockage. "Clear those items first" does
+      // not say where they are or what clearing means, and this party's rows are
+      // findable in one place: their own section on the checklist.
       return {
         error:
-          `This party has ${touchedCount} item${touchedCount === 1 ? "" : "s"} ` +
-          `already in progress or with documents attached. Removing them would ` +
-          `take that work off the checklist — clear those items first if you ` +
-          `really mean to remove the party.`,
+          `Nothing was removed. This party has ${touchedCount} item${touchedCount === 1 ? "" : "s"} ` +
+          `already in progress or with documents attached, and removing the party ` +
+          `would leave ${touchedCount === 1 ? "it" : "them"} on the checklist with no ` +
+          `owner. Its own section on the checklist lists them — set them back to ` +
+          `Not started and unlink any documents, then remove the party. Or leave the ` +
+          `party in place: it costs nothing but a row in the org chart.`,
       };
     }
 
