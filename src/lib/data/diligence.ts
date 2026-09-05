@@ -168,11 +168,36 @@ export interface LibraryDoc extends DiligenceDoc {
   linkedItemIds: string[];
 }
 
+/**
+ * A party named on THIS deal's org chart.
+ *
+ * The deal side of the entity model, and until now unreadable: parties could be
+ * typed during packet adoption and then never seen again. No screen listed
+ * them, no screen removed one, and the per-deal display_name override the
+ * schema provides had no UI at all.
+ */
+export interface DealParty {
+  entityId: string;
+  /** The catalog's name. */
+  name: string;
+  /** This deal's override, when its paperwork calls the party something else. */
+  displayName: string | null;
+  /** What the checklist should show — the override if there is one. */
+  label: string;
+  roleKey: string;
+  roleLabel: string;
+  sortOrder: number;
+  /** Checklist rows on this deal scoped to this party. */
+  itemCount: number;
+}
+
 export interface DiligenceChecklist {
   dealId: string;
   dealName: string;
   items: DiligenceItem[];
   team: TeamMember[];
+  /** The deal's org chart, in the order the parties were added. */
+  parties: DealParty[];
   rollup: DiligenceRollup;
   /** The deal's shared document library (every uploaded document, deduped,
    *  with its linked items). */
@@ -603,20 +628,55 @@ export async function getDiligenceChecklist(
   // differently does not have to fork the catalog row, and showing the catalog
   // name here would make the override invisible exactly where it matters.
   const entityNameById = new Map<string, string>();
+  const partyRows: Array<{
+    entity_id: string;
+    display_name: string | null;
+    sort_order: number;
+    name: string;
+    role_key: string;
+  }> = [];
   {
     const { data: entRows, error: entErr } = await sb
       .from("dm_diligence_deal_entities")
-      .select("entity_id, display_name, nurock_diligence_entities ( name )")
-      .eq("deal_id", dealId);
+      .select(
+        "entity_id, display_name, sort_order, nurock_diligence_entities ( name, role_key )"
+      )
+      .eq("deal_id", dealId)
+      .order("sort_order");
     if (!entErr) {
       for (const r of (entRows ?? []) as Array<{
         entity_id: string;
         display_name: string | null;
-        nurock_diligence_entities: { name: string } | null;
+        sort_order: number;
+        nurock_diligence_entities: { name: string; role_key: string } | null;
       }>) {
-        const name =
-          r.display_name?.trim() || r.nurock_diligence_entities?.name?.trim();
-        if (name) entityNameById.set(r.entity_id, name);
+        const catalogName = r.nurock_diligence_entities?.name?.trim();
+        const label = r.display_name?.trim() || catalogName;
+        if (label) entityNameById.set(r.entity_id, label);
+        if (catalogName) {
+          partyRows.push({
+            entity_id: r.entity_id,
+            display_name: r.display_name,
+            sort_order: r.sort_order,
+            name: catalogName,
+            role_key: r.nurock_diligence_entities!.role_key,
+          });
+        }
+      }
+    }
+  }
+
+  // Role labels for the org-chart panel. Read even when the deal has no parties
+  // is skipped — there is nothing to label.
+  const partyRoleLabel = new Map<string, string>();
+  if (partyRows.length > 0) {
+    const { data: roleRows, error: rErr } = await sb
+      .from("nurock_diligence_entity_roles")
+      .select("key, label")
+      .in("key", Array.from(new Set(partyRows.map((p) => p.role_key))));
+    if (!rErr) {
+      for (const r of (roleRows ?? []) as Array<{ key: string; label: string }>) {
+        partyRoleLabel.set(r.key, r.label);
       }
     }
   }
@@ -831,5 +891,26 @@ export async function getDiligenceChecklist(
     todayIso
   );
 
-  return { dealId, dealName, items, team, rollup, library };
+  // Per-party row counts, taken from the items already loaded rather than a
+  // second query — the checklist IS the answer to "how many rows does this
+  // party have on this deal", and asking the database again could disagree with
+  // what the page is rendering.
+  const rowsByEntity = new Map<string, number>();
+  for (const i of items) {
+    if (!i.entityId) continue;
+    rowsByEntity.set(i.entityId, (rowsByEntity.get(i.entityId) ?? 0) + 1);
+  }
+
+  const parties: DealParty[] = partyRows.map((p) => ({
+    entityId: p.entity_id,
+    name: p.name,
+    displayName: p.display_name,
+    label: p.display_name?.trim() || p.name,
+    roleKey: p.role_key,
+    roleLabel: partyRoleLabel.get(p.role_key) ?? p.role_key.replace(/_/g, " "),
+    sortOrder: p.sort_order,
+    itemCount: rowsByEntity.get(p.entity_id) ?? 0,
+  }));
+
+  return { dealId, dealName, items, team, parties, rollup, library };
 }

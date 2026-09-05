@@ -24,6 +24,7 @@ import {
   groupCombined,
 } from "@/lib/diligence/checklist-groups";
 import { OrgChartDialog } from "./org-chart-dialog";
+import { DealPartiesPanel } from "./deal-parties-panel";
 import {
   getOrgChartRequirements,
   type OrgChartRole,
@@ -167,7 +168,7 @@ export function DiligenceShell({
   canEdit: boolean;
   canApprove: boolean;
 }) {
-  const { dealId, dealName, items, team, rollup, library } = checklist;
+  const { dealId, dealName, items, team, parties, rollup, library } = checklist;
   const router = useRouter();
 
   const [query, setQuery] = React.useState("");
@@ -1180,6 +1181,27 @@ export function DiligenceShell({
             </div>
           )}
         </div>
+      )}
+
+      {/* ---------------------------------------------------------------
+          THE DEAL'S ORG CHART, VISIBLE AFTER ADOPTION
+          ---------------------------------------------------------------
+          Parties could previously only be typed during packet adoption and
+          were then unreachable: nothing listed them, nothing removed one, and
+          the per-deal name override had no UI. Round 58 made that concrete —
+          six test parties could not be deleted from the catalog (correctly,
+          the deal still named them) and nothing could stop the deal naming
+          them, so the only way out was hand-written SQL.
+
+          Rendered only when there is something to show or fill: a deal running
+          a plain canonical checklist has no repeating sections, and an org
+          chart there would be a panel about a feature that is not in use. */}
+      {(parties.length > 0 || financiers.length > 0) && (
+        <DealPartiesPanel
+          dealId={dealId}
+          parties={parties}
+          canEdit={canEdit}
+        />
       )}
 
       {/* ---------------------------------------------------------------

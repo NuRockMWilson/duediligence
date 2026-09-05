@@ -158,6 +158,78 @@ export async function getOrgChartRequirements(input: {
   return { roles, existing };
 }
 
+/**
+ * The roles this deal's ADOPTED packets need, across all of them.
+ *
+ * getOrgChartRequirements answers the same question for ONE template, because
+ * it runs at adoption time when exactly one packet is in question. This runs
+ * from the deal's own org-chart panel, where the deal may carry several packets
+ * and the union is what matters — a deal with a lender packet and an investor
+ * packet needs guarantors once, not once per packet.
+ *
+ * Returns [] for a deal whose packets have no repeating sections, which the
+ * panel uses to say so rather than offering to record a party that would
+ * produce no rows.
+ */
+export async function getDealOrgChartRoles(input: {
+  dealId: string;
+}): Promise<{ roles?: OrgChartRole[]; error?: string }> {
+  await assertDiligenceCan("view");
+  const supabase = (await createClient()) as AnySb;
+
+  const { data: adopted, error: aErr } = await supabase
+    .from("dm_diligence_deal_templates")
+    .select("template_id")
+    .eq("deal_id", input.dealId);
+  if (aErr) return { error: describeDbError(aErr) };
+  const templateIds = ((adopted ?? []) as Array<{ template_id: string }>).map(
+    (r) => r.template_id
+  );
+  if (templateIds.length === 0) return { roles: [] };
+
+  const { data: groups, error: gErr } = await supabase
+    .from("nurock_diligence_item_groups")
+    .select("label, entity_role")
+    .in("template_id", templateIds)
+    .eq("is_entity_parameterized", true);
+  if (gErr) return { error: describeDbError(gErr) };
+
+  const byRole = new Map<string, string[]>();
+  for (const g of (groups ?? []) as Array<{
+    label: string;
+    entity_role: string | null;
+  }>) {
+    if (!g.entity_role) continue;
+    const arr = byRole.get(g.entity_role) ?? [];
+    arr.push(g.label);
+    byRole.set(g.entity_role, arr);
+  }
+  if (byRole.size === 0) return { roles: [] };
+
+  const { data: roleRows, error: rErr } = await supabase
+    .from("nurock_diligence_entity_roles")
+    .select("key, label")
+    .in("key", Array.from(byRole.keys()));
+  if (rErr) return { error: describeDbError(rErr) };
+  const labels = new Map(
+    ((roleRows ?? []) as Array<{ key: string; label: string }>).map((r) => [
+      r.key,
+      r.label,
+    ])
+  );
+
+  const roles: OrgChartRole[] = Array.from(byRole.entries()).map(
+    ([key, blockLabels]) => ({
+      key,
+      label: labels.get(key) ?? key.replace(/_/g, " "),
+      blockCount: blockLabels.length,
+      blockLabels,
+    })
+  );
+  roles.sort((a, b) => a.label.localeCompare(b.label));
+  return { roles };
+}
+
 export interface OrgChartEntry {
   /** An existing catalog entity, when the user picked one. */
   entityId?: string;
@@ -337,6 +409,43 @@ export async function saveDealOrgChart(input: {
 
   revalidatePath(`/deals/${input.dealId}/diligence`);
   return { linked: linkRows.length, created };
+}
+
+/**
+ * Set or clear THIS DEAL's name override for a party.
+ *
+ * The schema has carried display_name since the entity migration and nothing
+ * has ever written it. It exists for the case the catalog cannot solve: one
+ * deal's paperwork names a party differently from every other deal's. Without
+ * it the only options are renaming the catalog row — which changes every deal —
+ * or forking it, which loses the cross-deal link the shared catalog exists for.
+ *
+ * An empty string clears the override and the catalog name shows again.
+ */
+export async function setDealEntityDisplayName(input: {
+  dealId: string;
+  entityId: string;
+  displayName: string | null;
+}): Promise<{ error?: string }> {
+  await assertDiligenceCan("edit");
+
+  const supabase = (await createClient()) as AnySb;
+  const { data, error } = await supabase
+    .from("dm_diligence_deal_entities")
+    .update({ display_name: input.displayName?.trim() || null })
+    .eq("deal_id", input.dealId)
+    .eq("entity_id", input.entityId)
+    .select("entity_id");
+  if (error) return { error: describeDbError(error) };
+  if (!data || (data as unknown[]).length === 0) {
+    return {
+      error:
+        "The change didn't persist — no row was updated. Check row-level security on dm_diligence_deal_entities.",
+    };
+  }
+
+  revalidatePath(`/deals/${input.dealId}/diligence`);
+  return {};
 }
 
 /**
