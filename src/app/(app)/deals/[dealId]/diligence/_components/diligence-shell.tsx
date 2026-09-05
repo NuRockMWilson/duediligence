@@ -110,7 +110,11 @@ const UNASSIGNED = "__unassigned__";
 // shared sentinel would make one filter silently answer the other.
 const CANONICAL_ONLY = "__canonical__";
 const RESPONSIBLE_NOBODY = "__resp_nobody__";
-const RESPONSIBLE_ANY_FINANCIER = "__resp_financier__";
+// PREFIX, not a single sentinel. Michael asked the financier option to name the
+// actual financier ("PNC Bank"), not the generic word — and a deal can carry
+// packets from two lenders, so one shared sentinel would filter to "whichever
+// financier" and silently conflate them. The name rides in the value.
+const RESPONSIBLE_FINANCIER_PREFIX = "__resp_fin__:";
 const BULK_PLACEHOLDER = "__bulk__";
 
 const RING_TONE: Record<string, "green" | "amber" | "red" | "navy"> = {
@@ -231,6 +235,13 @@ export function DiligenceShell({
   const packetOptions = React.useMemo(() => {
     const seen = new Map<string, string>();
     for (const i of items) {
+      // EXCLUDE THE CANONICAL TEMPLATE EXPLICITLY. The first version tested
+      // `i.templateId !== null` on the assumption that canonical items had no
+      // template — they do, the canonical one — so the list was never empty and
+      // the filter rendered on every deal offering three choices that all
+      // returned the same rows. Live round 55 caught it. The fix is to read the
+      // fact rather than infer it from a null.
+      if (i.isCanonicalTemplate) continue;
       if (i.templateId && !seen.has(i.templateId)) {
         seen.set(i.templateId, i.templateName ?? i.financierName ?? "Packet");
       }
@@ -239,6 +250,26 @@ export function DiligenceShell({
       value,
       label,
     }));
+  }, [items]);
+
+  /**
+   * Financiers that actually appear on this checklist, for the responsible
+   * filter (R55-1).
+   *
+   * Michael asked for the ACTUAL financier name rather than the generic word
+   * "The financier". responsible_is_financier is only a boolean — it does not
+   * record WHICH financier — but it does not need to: the financier is whoever
+   * owns the packet the item came from, so "PNC Bank is responsible" resolves
+   * to `responsibleIsFinancier AND this item's financier is PNC Bank`. That is
+   * derivable per row, and it stays correct on a deal carrying two packets from
+   * two different lenders, where one generic option would have conflated them.
+   */
+  const financierOptions = React.useMemo(() => {
+    const seen = new Set<string>();
+    for (const i of items) {
+      if (!i.isCanonicalTemplate && i.financierName) seen.add(i.financierName);
+    }
+    return Array.from(seen).sort();
   }, [items]);
 
   const filtered = React.useMemo(() => {
@@ -267,8 +298,10 @@ export function DiligenceShell({
       // to chase, not the absence of a filter.
       if (responsibleFilter === RESPONSIBLE_NOBODY) {
         if (i.responsibleUserId || i.responsibleIsFinancier) return false;
-      } else if (responsibleFilter === RESPONSIBLE_ANY_FINANCIER) {
-        if (!i.responsibleIsFinancier) return false;
+      } else if (responsibleFilter.startsWith(RESPONSIBLE_FINANCIER_PREFIX)) {
+        // Named financier (R55-1), resolved per row from the item's own packet.
+        const want = responsibleFilter.slice(RESPONSIBLE_FINANCIER_PREFIX.length);
+        if (!i.responsibleIsFinancier || i.financierName !== want) return false;
       } else if (
         responsibleFilter !== ALL &&
         i.responsibleUserId !== responsibleFilter
@@ -836,7 +869,15 @@ export function DiligenceShell({
             className="h-8 bg-nurock-navy hover:bg-nurock-navy-dark text-white"
           >
             <FileDown className="w-3.5 h-3.5 mr-1.5" />
-            Export packet
+            {/* "Export packet" collided with the other meaning of packet.
+                Round 55 flagged this button rendering on a deal with no packet
+                adopted and read it as the same can-do-nothing bug as the filter
+                — reasonably, because everywhere else on this page "packet"
+                means a financier's adopted template. It is not that bug: this
+                exports the DEAL'S CHECKLIST as a branded PDF and is valid on
+                any deal, packets or none. One word meaning two things is the
+                actual defect, so the button now says what it produces. */}
+            Export PDF
           </Button>
         </div>
       </div>
@@ -1028,7 +1069,15 @@ export function DiligenceShell({
                         <span className="flex flex-col items-start leading-tight">
                           <span>{t.name}</span>
                           {t.financierName && t.financierName !== t.name && (
-                            <span className="text-[10.5px] text-nurock-slate-light">
+                            // opacity ALONGSIDE the colour, deliberately.
+                            // Round 55 measured both lines computing the same
+                            // near-black, so the colour class alone is losing
+                            // to something — SelectItem carries a
+                            // `focus:**:text-accent-foreground` rule that
+                            // repaints every descendant. Opacity composes with
+                            // whatever colour ends up winning, so the second
+                            // line reads as secondary either way.
+                            <span className="text-[10.5px] text-nurock-slate-light opacity-70">
                               {t.financierName}
                             </span>
                           )}
@@ -1053,10 +1102,21 @@ export function DiligenceShell({
                   <Card key={f.templateId} className="p-4">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
+                        {/* THE SAME DEFECT THE PICKER HAD, IN A SECOND PLACE.
+                            This read `{f.financierName ?? f.name}`, so a packet
+                            with a financier showed only "PNC Bank" — and with
+                            two PNC packets in the catalog nobody could tell
+                            which one was actually on the deal. Round 55 found
+                            it surviving here after the picker was fixed.
+                            Template name is the identity; financier is
+                            context. */}
                         <div className="font-display text-[13px] font-semibold text-nurock-black truncate">
-                          {f.financierName ?? f.name}
+                          {f.name}
                         </div>
-                        <div className="text-[10.5px] uppercase tracking-wider text-nurock-slate-light">
+                        <div className="text-[10.5px] uppercase tracking-wider text-nurock-slate-light truncate">
+                          {f.financierName && f.financierName !== f.name
+                            ? `${f.financierName} · `
+                            : ""}
                           {f.kind === "investor"
                             ? "Investor"
                             : f.kind === "lender"
@@ -1223,8 +1283,17 @@ export function DiligenceShell({
           onChange={setResponsibleFilter}
           placeholder="Anyone responsible"
           options={[
-            { value: RESPONSIBLE_NOBODY, label: "Nobody decided yet" },
-            { value: RESPONSIBLE_ANY_FINANCIER, label: "The financier" },
+            // "No responsible party" rather than "Nobody decided yet" (R55-2):
+            // the same register as the rest of the app, and it now matches the
+            // item drawer's own null label so one concept reads one way in both
+            // places.
+            { value: RESPONSIBLE_NOBODY, label: "No responsible party" },
+            // Named financiers, not the generic word (R55-1). Only those
+            // actually on this checklist appear.
+            ...financierOptions.map((f) => ({
+              value: `${RESPONSIBLE_FINANCIER_PREFIX}${f}`,
+              label: `${f} (financier)`,
+            })),
             ...team.map((t) => ({ value: t.userId, label: t.name })),
           ]}
         />
@@ -1476,7 +1545,7 @@ export function DiligenceShell({
                             </span>
                           ) : (
                             <span className="text-nurock-slate-light italic">
-                              Not decided
+                              None set
                             </span>
                           )}
                         </td>

@@ -93,6 +93,18 @@ export interface DiligenceItem {
   templateName: string | null;
   financierName: string | null;
   /**
+   * True for items from the canonical NuRock checklist.
+   *
+   * THIS EXISTS BECAUSE ASSUMING ITS ABSENCE WAS A BUG. R2.2's packet filter
+   * was meant to hide itself on a deal with no financier packet, and derived
+   * "has a packet" from templateId being non-null — but canonical items have a
+   * template too (the canonical one), so the condition was never false and the
+   * filter rendered on every deal offering three choices that all returned the
+   * same rows. Caught in live round 55. "Is it canonical" is a real fact about
+   * a template and has to be read, not inferred from a null.
+   */
+  isCanonicalTemplate: boolean;
+  /**
    * The packet's OWN section for this item (ASK 6 groups), e.g. "Entity
    * Information" / "Marlin Housing Partners, LP - Partnership".
    *
@@ -569,21 +581,23 @@ export async function getDiligenceChecklist(
   // FINANCIER is the responsible party — and R2.2 groups the checklist by it.
   const templateMeta = new Map<
     string,
-    { name: string; financierName: string | null }
+    { name: string; financierName: string | null; isCanonical: boolean }
   >();
   {
     const { data: tmplRows, error: tmplErr } = await sb
       .from("nurock_diligence_templates")
-      .select("id, name, financier_name");
+      .select("id, name, financier_name, is_canonical");
     if (!tmplErr) {
       for (const r of (tmplRows ?? []) as Array<{
         id: string;
         name: string;
         financier_name: string | null;
+        is_canonical: boolean | null;
       }>) {
         templateMeta.set(r.id, {
           name: r.name,
           financierName: r.financier_name,
+          isCanonical: Boolean(r.is_canonical),
         });
       }
     }
@@ -721,6 +735,7 @@ export async function getDiligenceChecklist(
             templateId: tid,
             templateName: tmpl?.name ?? null,
             financierName: tmpl?.financierName ?? null,
+            isCanonicalTemplate: tmpl?.isCanonical ?? false,
             ...(() => {
               const gid = meta?.group_id ?? null;
               const g = gid ? groupMeta.get(gid) : undefined;

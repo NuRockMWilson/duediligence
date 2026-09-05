@@ -392,13 +392,20 @@ export function ItemDrawer({
               disabled={!canEdit || pending}
             >
               <SelectTrigger className="h-9 text-sm">
-                <SelectValue placeholder="Not decided" />
+                <SelectValue placeholder="No responsible party" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={RESPONSIBLE_NONE}>Not decided</SelectItem>
+                {/* "No responsible party", matching the deal-level filter
+                    (R55-2). One concept should read the same way in both
+                    places; the drawer previously said "Not decided" while the
+                    filter said "Nobody decided yet", which were two strings for
+                    one state. */}
+                <SelectItem value={RESPONSIBLE_NONE}>
+                  No responsible party
+                </SelectItem>
                 {item.financierName && (
                   <SelectItem value={RESPONSIBLE_FINANCIER}>
-                    {item.financierName} (the financier)
+                    {item.financierName} (financier)
                   </SelectItem>
                 )}
                 {team.map((t) => (
