@@ -118,6 +118,23 @@ export interface DiligenceItem {
   groupLabel: string | null;
   /** The parent section's label when the group is a subsection. */
   groupParentLabel: string | null;
+  /**
+   * WHICH NAMED PARTY this row belongs to, for rows produced by a repeating
+   * block. Null for ordinary items.
+   *
+   * ADDED BECAUSE THE ROWS EXISTED AND THE NAMES DID NOT REACH THE SCREEN.
+   * Round 57 adopted a packet with two GPs, two developers and two guarantors:
+   * replication fired exactly right — 64 entity-scoped rows, total 333 to the
+   * item — but the checklist rendered ONE section per ROLE, so the GP block's
+   * 14 rows appeared as seven identical consecutive pairs with nothing
+   * distinguishing ZZ TEST GP ONE's copy from GP TWO's. All six entity names
+   * were absent from the page and from its RSC payload.
+   *
+   * The data was correct and the labelling did not follow it. This is the field
+   * that makes it follow.
+   */
+  entityId: string | null;
+  entityName: string | null;
   approvedAt: string | null;
   waivedReason: string | null;
   docs: DiligenceDoc[];
@@ -555,16 +572,20 @@ export async function getDiligenceChecklist(
     string,
     { userId: string | null; isFinancier: boolean }
   >();
+  // entity_id rides along on the same tolerant read — same table, same
+  // migration family, and one query rather than two.
+  const entityByItem = new Map<string, string>();
   {
     const { data: respRows, error: respErr } = await sb
       .from("dm_diligence_deal_items")
-      .select("id, responsible_user_id, responsible_is_financier")
+      .select("id, responsible_user_id, responsible_is_financier, entity_id")
       .eq("deal_id", dealId);
     if (!respErr) {
       for (const r of (respRows ?? []) as Array<{
         id: string;
         responsible_user_id: string | null;
         responsible_is_financier: boolean | null;
+        entity_id: string | null;
       }>) {
         if (r.responsible_user_id || r.responsible_is_financier) {
           responsibleByItem.set(r.id, {
@@ -572,6 +593,30 @@ export async function getDiligenceChecklist(
             isFinancier: Boolean(r.responsible_is_financier),
           });
         }
+        if (r.entity_id) entityByItem.set(r.id, r.entity_id);
+      }
+    }
+  }
+
+  // The deal's named parties. display_name on the LINK wins over the catalog
+  // name: that override exists so a deal whose paperwork names an entity
+  // differently does not have to fork the catalog row, and showing the catalog
+  // name here would make the override invisible exactly where it matters.
+  const entityNameById = new Map<string, string>();
+  {
+    const { data: entRows, error: entErr } = await sb
+      .from("dm_diligence_deal_entities")
+      .select("entity_id, display_name, nurock_diligence_entities ( name )")
+      .eq("deal_id", dealId);
+    if (!entErr) {
+      for (const r of (entRows ?? []) as Array<{
+        entity_id: string;
+        display_name: string | null;
+        nurock_diligence_entities: { name: string } | null;
+      }>) {
+        const name =
+          r.display_name?.trim() || r.nurock_diligence_entities?.name?.trim();
+        if (name) entityNameById.set(r.entity_id, name);
       }
     }
   }
@@ -742,10 +787,17 @@ export async function getDiligenceChecklist(
               const parent = g?.parentId
                 ? groupMeta.get(g.parentId)
                 : undefined;
+              const eid = entityByItem.get(r.id) ?? null;
               return {
                 groupId: gid,
                 groupLabel: g?.label ?? null,
                 groupParentLabel: parent?.label ?? null,
+                entityId: eid,
+                // A row can carry an entity_id whose link was since removed.
+                // Null rather than a guess: the checklist then shows the block
+                // name it always showed, which is wrong but honest, instead of
+                // inventing a party name.
+                entityName: eid ? (entityNameById.get(eid) ?? null) : null,
               };
             })(),
           };

@@ -19,6 +19,10 @@ import {
   packetsPresent,
   PACKET_SCOPE_CANONICAL,
 } from "@/lib/diligence/item-filters";
+import {
+  groupBySection,
+  groupCombined,
+} from "@/lib/diligence/checklist-groups";
 import { OrgChartDialog } from "./org-chart-dialog";
 import {
   getOrgChartRequirements,
@@ -367,49 +371,24 @@ export function DiligenceShell({
       };
     };
 
+    // THE GROUPING ITSELF LIVES IN lib/diligence/checklist-groups.ts, tested.
+    //
+    // Round 57 found two rendering faults that the engine's own correctness
+    // hid: 274 packet rows counted but never drawn (the old code kept only the
+    // fifteen canonical categories, and imported items are "imported"), and a
+    // repeating block rendered as one section per ROLE so two GP entities'
+    // rows appeared as identical consecutive pairs with neither party named.
+    //
+    // Both are invisible to any test that inspects a group's contents, because
+    // the fault is in what never appears. The module's tests assert a PARTITION
+    // instead — every item in exactly one group, groups summing to the input —
+    // and reintroducing either bug fails five of them.
     const packetHasSections =
       packetFilter !== ALL && filtered.some((i) => i.groupId !== null);
-
-    if (packetHasSections) {
-      // FIRST-APPEARANCE ORDER, not alphabetical. The read layer already sorts
-      // items by the lender's own numbering, and "10" sorts before "2" — so an
-      // alphabetical pass would silently reorder a numbered checklist away from
-      // the source document.
-      const byGroup = new Map<string, DiligenceItem[]>();
-      const order: string[] = [];
-      for (const i of filtered) {
-        const key = i.groupId ?? "__ungrouped__";
-        if (!byGroup.has(key)) {
-          byGroup.set(key, []);
-          order.push(key);
-        }
-        byGroup.get(key)!.push(i);
-      }
-      return order.map((key) => {
-        const arr = byGroup.get(key)!;
-        const first = arr[0];
-        const label =
-          key === "__ungrouped__"
-            ? "Ungrouped"
-            : // Parent prefix so a subsection reads unambiguously: two sections
-              // may each hold a "Title" subsection, and "Real Estate › Title"
-              // says which one without needing a nested table.
-              [first.groupParentLabel, first.groupLabel]
-                .filter(Boolean)
-                .join(" › ") || "Ungrouped";
-        return rollUp(key, label, undefined, arr);
-      });
-    }
-
-    const byCat = new Map<string, DiligenceItem[]>();
-    for (const i of filtered) {
-      const arr = byCat.get(i.category) ?? [];
-      arr.push(i);
-      byCat.set(i.category, arr);
-    }
-    return DILIGENCE_CATEGORIES.filter((c) => byCat.has(c.key)).map((c) =>
-      rollUp(c.key, c.label, c.blurb, byCat.get(c.key)!)
-    );
+    const shaped = packetHasSections
+      ? groupBySection(filtered)
+      : groupCombined(filtered);
+    return shaped.map((g) => rollUp(g.key, g.label, g.blurb, g.items));
   }, [filtered, todayIso, packetFilter]);
 
   // Collapsible category sections. Seed COLLAPSED with the fully-satisfied
@@ -1153,8 +1132,19 @@ export function DiligenceShell({
                       />
                     </div>
                     <div className="mt-2 flex items-center justify-between text-[11px] text-nurock-slate-light">
-                      <span>
-                        {f.satisfied}/{f.total} items satisfied
+                      {/* "REQUIREMENTS COVERED", not "items satisfied".
+                          Round 57: this card read "0/242 items satisfied" while
+                          the same screen said the deal had gained 274 rows —
+                          two counts of apparently the same thing, disagreeing.
+                          Both were right and neither said so. This counts the
+                          LENDER'S REQUIREMENTS met through the crosswalk; the
+                          deal's counter counts TRACKED ROWS, and a repeating
+                          block turns one requirement into one row per party, so
+                          they legitimately differ and always will. The numbers
+                          were never wrong — the word "items" was, because it is
+                          the same word the checklist uses for rows. */}
+                      <span title="How many of this packet's requirements are covered by your standard checklist, via the crosswalk. Not the same as the number of rows on the deal — a section that repeats per party becomes one row per party.">
+                        {f.satisfied}/{f.total} requirements covered
                       </span>
                       {f.unmappedCount > 0 && (
                         <span
