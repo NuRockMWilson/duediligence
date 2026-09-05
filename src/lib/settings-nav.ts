@@ -9,8 +9,9 @@
 // together. That is the contract: the account dropdown must always mirror the
 // sections of the settings page, so they can never drift apart.
 //
-// Diligence owns only three settings routes locally: Diligence Templates, Users
-// & Access (/settings/team), and Admin (/settings/admin). The org-wide cost +
+// Diligence owns five settings routes locally: Diligence Templates, Diligence
+// Parties (the org-level entity catalog), Diligence Reminders, Users & Access
+// (/settings/team), and Admin (/settings/admin). The org-wide cost +
 // reporting configuration (Report Formats, GL mappings, Vendors) physically
 // lives in the Development app, so those entries are CROSS-APP links to
 // devmgmt's /settings/* — keeping the unified "one platform" settings menu
@@ -90,6 +91,15 @@ export const SETTINGS_NAV: SettingsNavGroup[] = [
         href: "/settings/diligence-templates",
         label: "Diligence Templates",
         icon: ClipboardList,
+      },
+      {
+        // The org-level party catalog. Entities were previously WRITE-ONLY from
+        // the app — the org chart created them and nothing could list, rename,
+        // retire or remove one, so six test parties left by a round of live
+        // testing needed hand-written SQL to clear.
+        href: "/settings/diligence-entities",
+        label: "Diligence Parties",
+        icon: Users,
       },
       {
         // Per-user, deliberately NOT adminOnly: your own reminder cadence is
