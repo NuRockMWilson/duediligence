@@ -561,16 +561,35 @@ export async function adoptTemplateForDeal(input: {
   return {};
 }
 
+/**
+ * A DISCRIMINATED UNION, not a bag of optional fields.
+ *
+ * The first version typed this as `{ error?, removed?, kept? }` — all optional —
+ * and the function still ended with the original `return {}`. It compiled
+ * perfectly: `{}` satisfies a type whose every field is optional. So live round
+ * 58 deleted all 274 rows correctly, orphan-free, and reported "Packet removed —
+ * 0 rows deleted", which is the opposite of what happened and would tell an
+ * operator to try again after their checklist had just lost two thirds of its
+ * contents.
+ *
+ * Optional-everything return types cannot tell you that you forgot to return
+ * anything. This shape can: the success branch REQUIRES both counts, so a bare
+ * `return {}` is a compile error rather than a silent zero.
+ */
+export type UnadoptResult =
+  | { error: string; removed?: undefined; kept?: undefined }
+  | {
+      error?: undefined;
+      /** Rows deleted because nobody had worked them. */
+      removed: number;
+      /** Rows KEPT because they carry history — worked, documented, signed off. */
+      kept: number;
+    };
+
 export async function unadoptTemplateForDeal(input: {
   dealId: string;
   templateId: string;
-}): Promise<{
-  error?: string;
-  /** Rows deleted because nobody had worked them. */
-  removed?: number;
-  /** Rows KEPT because they carry history — worked, documented or signed off. */
-  kept?: number;
-}> {
+}): Promise<UnadoptResult> {
   await assertDiligenceCan("edit");
   const authed = await createClient();
   const {
@@ -715,11 +734,18 @@ export async function unadoptTemplateForDeal(input: {
     dealId: input.dealId,
     actorUserId: user?.id ?? null,
     eventType: "packet_removed",
-    summary: "Packet removed from the deal",
-    detail: { templateId: input.templateId },
+    // The counts belong in the audit trail too. "Packet removed from the deal"
+    // does not distinguish detaching an empty packet from deleting 274 tracked
+    // rows, and the audit log is where someone reconstructs what happened after
+    // the toast is long gone.
+    summary:
+      kept > 0
+        ? `Packet removed — ${removed} untouched row(s) deleted, ${kept} kept (work or documents attached)`
+        : `Packet removed — ${removed} row(s) deleted`,
+    detail: { templateId: input.templateId, removed, kept },
   });
 
   revalidatePath(`/deals/${input.dealId}/diligence`);
   revalidatePath(`/deals/${input.dealId}/dashboard`);
-  return {};
+  return { removed, kept };
 }

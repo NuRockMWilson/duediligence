@@ -699,10 +699,17 @@ export function DiligenceShell({
   const [packetToRemove, setPacketToRemove] = React.useState<{
     templateId: string;
     name: string;
+    /** Rows this packet contributed, counted from the checklist itself. */
+    rowCount: number;
   } | null>(null);
 
   function removePacket(templateId: string, name: string) {
-    setPacketToRemove({ templateId, name });
+    // Counted from the loaded items rather than asked of the server: it is the
+    // same list the table is rendering, so the number in the dialog is the
+    // number on screen. Entity-scoped rows are included, which is the point —
+    // a repeating block is where the count gets surprising.
+    const rowCount = items.filter((i) => i.templateId === templateId).length;
+    setPacketToRemove({ templateId, name, rowCount });
   }
 
   function confirmRemovePacket() {
@@ -1686,7 +1693,20 @@ export function DiligenceShell({
         title="Remove packet?"
         description={
           packetToRemove
-            ? `Remove the "${packetToRemove.name}" packet from this deal? Its crosswalk coverage disappears from this page; the template itself stays available in Settings.`
+            ? // SAY WHAT WILL BE DESTROYED, BEFORE IT IS.
+              // The old wording named the two things that survive — the
+              // template, and the fact that only coverage disappears — and
+              // never mentioned that hundreds of checklist rows are deleted.
+              // On the test deal that was 274 rows. That is the consequence a
+              // person most needs before confirming, and the count is already
+              // known at click time.
+              `Remove the "${packetToRemove.name}" packet from this deal? ${
+                packetToRemove.rowCount > 0
+                  ? `${packetToRemove.rowCount} checklist row${
+                      packetToRemove.rowCount === 1 ? "" : "s"
+                    } from this packet will be deleted — except any with work, documents or sign-offs on them, which stay. `
+                  : ""
+              }The template itself stays available in Settings, and the deal's org chart is not affected.`
             : undefined
         }
         confirmLabel="Remove packet"
