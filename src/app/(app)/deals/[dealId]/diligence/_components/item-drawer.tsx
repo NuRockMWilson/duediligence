@@ -551,8 +551,16 @@ export function ItemDrawer({
               onChange={(e) => setNotes(e.target.value)}
               onBlur={() => {
                 if ((item.notes ?? "") !== notes)
-                  run(() =>
-                    setDiligenceNotes({ dealId, dealItemId: item.id, notes })
+                  // WITH A MESSAGE. run()'s second argument is the toast, and
+                  // this was the one write in the drawer that omitted it — so a
+                  // note saved on blur with no feedback at all, and a silent
+                  // save is indistinguishable from a failed one until you
+                  // reload. Round 56 flagged it as exactly the ambiguity that
+                  // cost earlier rounds of this program real time.
+                  run(
+                    () =>
+                      setDiligenceNotes({ dealId, dealItemId: item.id, notes }),
+                    notes.trim() ? "Note saved" : "Note cleared"
                   );
               }}
               rows={2}

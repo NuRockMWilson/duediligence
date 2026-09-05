@@ -14,6 +14,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import {
+  matchesPacketScope,
+  packetsPresent,
+  PACKET_SCOPE_CANONICAL,
+} from "@/lib/diligence/item-filters";
 import { OrgChartDialog } from "./org-chart-dialog";
 import {
   getOrgChartRequirements,
@@ -108,7 +113,9 @@ const UNASSIGNED = "__unassigned__";
 // R2.2 filter sentinels. Distinct values rather than reusing UNASSIGNED,
 // because "no packet" and "nobody responsible" are different questions and a
 // shared sentinel would make one filter silently answer the other.
-const CANONICAL_ONLY = "__canonical__";
+// Re-exported from the filter module so the sentinel the UI offers and the one
+// the predicate tests can never drift apart.
+const CANONICAL_ONLY = PACKET_SCOPE_CANONICAL;
 const RESPONSIBLE_NOBODY = "__resp_nobody__";
 // PREFIX, not a single sentinel. Michael asked the financier option to name the
 // actual financier ("PNC Bank"), not the generic word — and a deal can carry
@@ -232,25 +239,10 @@ export function DiligenceShell({
   // rather than from availableTemplates: a template can be adopted and still
   // have contributed no items, and offering a filter that can only ever return
   // nothing is worse than not offering it.
-  const packetOptions = React.useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const i of items) {
-      // EXCLUDE THE CANONICAL TEMPLATE EXPLICITLY. The first version tested
-      // `i.templateId !== null` on the assumption that canonical items had no
-      // template — they do, the canonical one — so the list was never empty and
-      // the filter rendered on every deal offering three choices that all
-      // returned the same rows. Live round 55 caught it. The fix is to read the
-      // fact rather than infer it from a null.
-      if (i.isCanonicalTemplate) continue;
-      if (i.templateId && !seen.has(i.templateId)) {
-        seen.set(i.templateId, i.templateName ?? i.financierName ?? "Packet");
-      }
-    }
-    return Array.from(seen.entries()).map(([value, label]) => ({
-      value,
-      label,
-    }));
-  }, [items]);
+  // Same module, same reason: the "which packets are here" decision and the
+  // "is this item in scope" decision have to agree, and they only reliably
+  // agree when they are one tested thing rather than two inline conditions.
+  const packetOptions = React.useMemo(() => packetsPresent(items), [items]);
 
   /**
    * Financiers that actually appear on this checklist, for the responsible
@@ -285,13 +277,14 @@ export function DiligenceShell({
         i.assigneeUserId !== assigneeFilter
       )
         return false;
-      if (packetFilter === CANONICAL_ONLY && i.templateId !== null) return false;
-      if (
-        packetFilter !== ALL &&
-        packetFilter !== CANONICAL_ONLY &&
-        i.templateId !== packetFilter
-      )
-        return false;
+      // ONE TESTED PREDICATE, not a condition rewritten per call site. The
+      // inline version kept the wrong assumption after packetOptions was
+      // corrected for it — canonical items DO have a template, the canonical
+      // one — so "NuRock standard only" returned 0 of 97 while the CSV export
+      // listed 59 canonical rows on the same deal. Fixing one site and leaving
+      // the other is how it survived a round; lib/diligence/item-filters.ts now
+      // owns the decision and its tests pin the partition property.
+      if (!matchesPacketScope(i, packetFilter)) return false;
       // Responsible party is a THREE-state field (a user, the financier, or
       // undecided), so the filter needs its own sentinels rather than reusing
       // the assignee ones — "nobody decided" is a real answer people will want
@@ -1544,8 +1537,17 @@ export function DiligenceShell({
                               {i.responsibleName}
                             </span>
                           ) : (
+                            // "None" rather than repeating the full phrase.
+                            // Round 56 fairly noted this is a third string for
+                            // one state, after the drawer and filter were made
+                            // to agree on "No responsible party". The
+                            // difference is that those are CONTROLS, where the
+                            // phrase names what you are choosing; this is DATA
+                            // under a column already headed "Responsible", so
+                            // repeating the noun would be redundant. One word,
+                            // unmistakably the same state.
                             <span className="text-nurock-slate-light italic">
-                              None set
+                              None
                             </span>
                           )}
                         </td>
